@@ -1852,6 +1852,8 @@ enable=true
     # -------------------------------------------------------------------------------------------------------------------------------------
     #  whatsapp  |     group JID      | 48111222333-123455678999@g.us | A unique group JID. If you specify an empty string, bridge will list all the possibilities
     #            |    "Group Name"    |         "Family Chat"         | if you specify a group name, the bridge will find hint the JID to specify. Names can change over time and are not stable.
+    #            |      user JID      |  48111222333@s.whatsapp.net   | A 1:1 chat with a contact, identified by phone number
+    #            |      LID JID       |     123456789012345@lid       | A 1:1 chat with a contact, identified by WhatsApp Linked ID (LID)
     # -------------------------------------------------------------------------------------------------------------------------------------
     #    xmpp    |      channel       |            general            | The room name
     # -------------------------------------------------------------------------------------------------------------------------------------

@@ -147,7 +147,10 @@ func (b *Bwhatsapp) handleTextMessage(messageInfo types.MessageInfo, msg *proto.
 		ci := msg.GetExtendedTextMessage().GetContextInfo()
 
 		if senderJID == (types.JID{}) && ci.Participant != nil {
-			senderJID = types.NewJID(ci.GetParticipant(), types.DefaultUserServer)
+			parsed, err := types.ParseJID(ci.GetParticipant())
+			if err == nil {
+				senderJID = parsed
+			}
 		}
 
 		if ci.MentionedJID != nil {
@@ -157,7 +160,12 @@ func (b *Bwhatsapp) handleTextMessage(messageInfo types.MessageInfo, msg *proto.
 
 				// mentions comes as telephone numbers and we don't want to expose it to other bridges
 				// replace it with something more meaninful to others
-				mention := b.getSenderNotify(types.NewJID(numberAndSuffix[0], types.DefaultUserServer))
+				mentionJID, err := types.ParseJID(mentionedJID)
+				if err != nil {
+					mentionJID = types.NewJID(numberAndSuffix[0], types.DefaultUserServer)
+				}
+
+				mention := b.getSenderNotify(mentionJID)
 
 				text = strings.Replace(text, "@"+numberAndSuffix[0], "@"+mention, 1)
 			}
@@ -201,7 +209,10 @@ func (b *Bwhatsapp) handleImageMessage(msg *events.Message) {
 	ci := imsg.GetContextInfo()
 
 	if senderJID == (types.JID{}) && ci.Participant != nil {
-		senderJID = types.NewJID(ci.GetParticipant(), types.DefaultUserServer)
+		parsed, err := types.ParseJID(ci.GetParticipant())
+		if err == nil {
+			senderJID = parsed
+		}
 	}
 
 	rmsg := config.Message{
@@ -265,7 +276,10 @@ func (b *Bwhatsapp) handleVideoMessage(msg *events.Message) {
 	ci := imsg.GetContextInfo()
 
 	if senderJID == (types.JID{}) && ci.Participant != nil {
-		senderJID = types.NewJID(ci.GetParticipant(), types.DefaultUserServer)
+		parsed, err := types.ParseJID(ci.GetParticipant())
+		if err == nil {
+			senderJID = parsed
+		}
 	}
 
 	rmsg := config.Message{
@@ -332,7 +346,10 @@ func (b *Bwhatsapp) handleAudioMessage(msg *events.Message) {
 	ci := imsg.GetContextInfo()
 
 	if senderJID == (types.JID{}) && ci.Participant != nil {
-		senderJID = types.NewJID(ci.GetParticipant(), types.DefaultUserServer)
+		parsed, err := types.ParseJID(ci.GetParticipant())
+		if err == nil {
+			senderJID = parsed
+		}
 	}
 	rmsg := config.Message{
 		UserID:   senderJID.String(),
@@ -389,7 +406,10 @@ func (b *Bwhatsapp) handleDocumentMessage(msg *events.Message) {
 	ci := imsg.GetContextInfo()
 
 	if senderJID == (types.JID{}) && ci.Participant != nil {
-		senderJID = types.NewJID(ci.GetParticipant(), types.DefaultUserServer)
+		parsed, err := types.ParseJID(ci.GetParticipant())
+		if err == nil {
+			senderJID = parsed
+		}
 	}
 
 	rmsg := config.Message{

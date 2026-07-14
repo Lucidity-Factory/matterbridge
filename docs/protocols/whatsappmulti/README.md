@@ -37,6 +37,15 @@ The QR-Code is created by matterbridge on the terminal: It's the way WhatsApp au
 To setup a gateway between two protocols in matterbridge, you need to specify a channel for WA that should be bridged. The chat/group titles you see in WA won't work (e.g. from the screenshot above, "Test" won't work). Fortunately, matterbridge will complain about improper channel names and suggest the correct ones to you. In my case, it was a string of mainly numbers including the phone number of who created the group chat. Maybe there is a way to get this out of WA?
 (Currently, the WA example config does not explain this at all; it doesn't even mention the gateway part.)
 
+### Which channel formats are supported?
+
+- `48111222333-1549986983@g.us`: a group JID. The bridge checks that the account is a member of the group and lists the joined groups if it is not.
+- `48111222333@s.whatsapp.net`: a 1:1 chat with a contact, identified by phone number.
+- `123456789012345@lid`: a 1:1 chat with a contact, identified by WhatsApp's Linked ID (LID). WhatsApp increasingly identifies contacts by LID instead of phone number.
+- `status@broadcast`: accepted and ignored, so a configuration that lists it does not stop the bridge from starting.
+
+1:1 chats are not checked against the joined groups. If the contact is not in the account's contact list, a warning is logged and the bridge continues.
+
 ### How to set a nice channel name?
 
 Use `tengo`:

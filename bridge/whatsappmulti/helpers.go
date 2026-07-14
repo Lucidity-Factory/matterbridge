@@ -129,6 +129,11 @@ func isGroupJid(identifier string) bool {
 		strings.HasSuffix(identifier, "@broadcast")
 }
 
+func isPrivateJid(identifier string) bool {
+	return strings.HasSuffix(identifier, "@"+types.DefaultUserServer) ||
+		strings.HasSuffix(identifier, "@"+types.HiddenUserServer)
+}
+
 func (b *Bwhatsapp) getDevice() (*store.Device, error) {
 	device := &store.Device{}
 
