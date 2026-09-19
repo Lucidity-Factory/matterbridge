@@ -7,6 +7,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
@@ -240,16 +241,36 @@ func (b *Bwhatsapp) parseMessageID(id string) (*Replyable, error) {
 	return &Replyable{MessageID: id}, err
 }
 
-func getParentIdFromCtx(ci *proto.ContextInfo) string {
-	if ci != nil && ci.StanzaID != nil {
-		senderJid, err := types.ParseJID(*ci.Participant)
-
-		if err == nil {
-			return getMessageIdFormat(senderJid, *ci.StanzaID)
-		}
+// quotedMessageID returns the bridge message ID of the message quoted in ci,
+// or "" when there is no quote or it cannot be parsed. Messages the bridge sent
+// are recorded under the account's phone number JID, but a client that
+// addresses the account by LID quotes them with the LID as participant, so the
+// account's own LID is translated back to its phone number JID to make the two
+// keys match. Every other participant is used as is.
+func quotedMessageID(ci *waE2E.ContextInfo, ownID, ownLID types.JID) string {
+	if ci.GetStanzaID() == "" || ci.GetParticipant() == "" {
+		return ""
 	}
 
-	return ""
+	sender, err := types.ParseJID(ci.GetParticipant())
+	if err != nil {
+		return ""
+	}
+
+	if sender.Server == types.HiddenUserServer && !ownID.IsEmpty() && !ownLID.IsEmpty() && sender.User == ownLID.User {
+		sender = ownID
+	}
+
+	return getMessageIdFormat(sender, ci.GetStanzaID())
+}
+
+func (b *Bwhatsapp) parentIDFromContext(ci *waE2E.ContextInfo) string {
+	ownID := types.EmptyJID
+	if b.wc.Store.ID != nil {
+		ownID = *b.wc.Store.ID
+	}
+
+	return quotedMessageID(ci, ownID, b.wc.Store.GetLID())
 }
 
 func getMessageIdFormat(jid types.JID, messageID string) string {

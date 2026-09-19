@@ -176,7 +176,7 @@ func (b *Bwhatsapp) handleTextMessage(messageInfo types.MessageInfo, msg *proto.
 	parentID := ""
 	if msg.GetExtendedTextMessage() != nil {
 		ci := msg.GetExtendedTextMessage().GetContextInfo()
-		parentID = getParentIdFromCtx(ci)
+		parentID = b.parentIDFromContext(ci)
 	}
 
 	rmsg := config.Message{
@@ -224,7 +224,7 @@ func (b *Bwhatsapp) handleImageMessage(msg *events.Message) {
 		Protocol: b.Protocol,
 		Extra:    make(map[string][]any),
 		ID:       getMessageIdFormat(senderJID, msg.Info.ID),
-		ParentID: getParentIdFromCtx(ci),
+		ParentID: b.parentIDFromContext(ci),
 	}
 
 	if avatarURL, exists := b.userAvatars[senderJID.String()]; exists {
@@ -291,7 +291,7 @@ func (b *Bwhatsapp) handleVideoMessage(msg *events.Message) {
 		Protocol: b.Protocol,
 		Extra:    make(map[string][]any),
 		ID:       getMessageIdFormat(senderJID, msg.Info.ID),
-		ParentID: getParentIdFromCtx(ci),
+		ParentID: b.parentIDFromContext(ci),
 	}
 
 	if avatarURL, exists := b.userAvatars[senderJID.String()]; exists {
@@ -360,7 +360,7 @@ func (b *Bwhatsapp) handleAudioMessage(msg *events.Message) {
 		Protocol: b.Protocol,
 		Extra:    make(map[string][]any),
 		ID:       getMessageIdFormat(senderJID, msg.Info.ID),
-		ParentID: getParentIdFromCtx(ci),
+		ParentID: b.parentIDFromContext(ci),
 	}
 
 	if avatarURL, exists := b.userAvatars[senderJID.String()]; exists {
@@ -421,7 +421,7 @@ func (b *Bwhatsapp) handleDocumentMessage(msg *events.Message) {
 		Protocol: b.Protocol,
 		Extra:    make(map[string][]any),
 		ID:       getMessageIdFormat(senderJID, msg.Info.ID),
-		ParentID: getParentIdFromCtx(ci),
+		ParentID: b.parentIDFromContext(ci),
 	}
 
 	if avatarURL, exists := b.userAvatars[senderJID.String()]; exists {
