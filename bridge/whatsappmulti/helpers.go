@@ -161,19 +161,23 @@ func resolveChatJID(info types.MessageInfo, lookup func(types.JID) (types.JID, e
 // messageKey is the part of a revoked message's key needed to find its sender.
 type messageKey interface {
 	GetParticipant() string
-	GetRemoteJID() string
 }
 
-// deletedMessageSender returns the sender of a revoked message. The key names a
-// participant only for group messages; in a 1:1 chat the sender is the remote
-// party, and reading the participant there would dereference a nil pointer.
-func deletedMessageSender(key messageKey) types.JID {
-	id := key.GetParticipant()
-	if id == "" {
-		id = key.GetRemoteJID()
+// deletedMessageSender returns the sender of a revoked message, in the form
+// the original message was recorded under. The key names a participant only
+// in group chats, where an admin may revoke someone else's message. In a 1:1
+// chat the key has no participant and its remote JID is the chat as seen by
+// the revoker, so the revoker itself is the original sender.
+func deletedMessageSender(key messageKey, revoker types.JID) types.JID {
+	participant := key.GetParticipant()
+	if participant == "" {
+		return revoker
 	}
 
-	sender, _ := types.ParseJID(id)
+	sender, err := types.ParseJID(participant)
+	if err != nil {
+		return revoker
+	}
 
 	return sender
 }

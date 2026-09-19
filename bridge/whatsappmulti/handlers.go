@@ -457,7 +457,7 @@ func (b *Bwhatsapp) handleDocumentMessage(msg *events.Message) {
 
 func (b *Bwhatsapp) handleDelete(info types.MessageInfo, protocolMessage *waE2E.ProtocolMessage) {
 	key := protocolMessage.GetKey()
-	sender := deletedMessageSender(key)
+	sender := deletedMessageSender(key, info.Sender)
 
 	rmsg := config.Message{
 		Account:  b.Account,

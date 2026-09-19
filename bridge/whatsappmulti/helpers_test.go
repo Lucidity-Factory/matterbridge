@@ -55,26 +55,29 @@ func TestResolveChatJID(t *testing.T) {
 	}
 }
 
-type fakeKey struct{ participant, remote string }
+type fakeKey struct{ participant string }
 
 func (k fakeKey) GetParticipant() string { return k.participant }
-func (k fakeKey) GetRemoteJID() string   { return k.remote }
 
 func TestDeletedMessageSender(t *testing.T) {
+	revoker := types.NewADJID("200000000000002", 0, 13)
+	admin := types.NewJID("48333444555", types.DefaultUserServer)
+
 	tests := []struct {
-		name string
-		key  fakeKey
-		want types.JID
+		name    string
+		key     fakeKey
+		revoker types.JID
+		want    types.JID
 	}{
-		{"group message names the participant", fakeKey{testLID.String(), testGroup.String()}, testLID},
-		{"1:1 message falls back to the remote party", fakeKey{"", testPhone.String()}, testPhone},
-		{"1:1 LID message falls back to the remote LID", fakeKey{"", testLID.String()}, testLID},
-		{"empty key yields an empty JID", fakeKey{"", ""}, types.EmptyJID},
+		{"group revoke of own message names the participant", fakeKey{testLID.String()}, revoker, testLID},
+		{"group revoke by an admin names the original sender", fakeKey{testLID.String()}, admin, testLID},
+		{"1:1 revoke has no participant and falls back to the revoker", fakeKey{""}, revoker, revoker},
+		{"unparsable participant falls back to the revoker", fakeKey{"123:notanumber@s.whatsapp.net"}, revoker, revoker},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := deletedMessageSender(tt.key); got != tt.want {
+			if got := deletedMessageSender(tt.key, tt.revoker); got != tt.want {
 				t.Errorf("deletedMessageSender() = %s, want %s", got, tt.want)
 			}
 		})
