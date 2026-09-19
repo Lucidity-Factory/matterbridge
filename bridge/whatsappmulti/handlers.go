@@ -10,6 +10,7 @@ import (
 	"github.com/matterbridge-org/matterbridge/bridge/helper"
 
 	"go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -117,7 +118,7 @@ func (b *Bwhatsapp) handleMessage(message *events.Message) {
 	case msg.ImageMessage != nil:
 		b.handleImageMessage(message)
 	case msg.ProtocolMessage != nil && *msg.ProtocolMessage.Type == proto.ProtocolMessage_REVOKE:
-		b.handleDelete(msg.ProtocolMessage)
+		b.handleDelete(message.Info, msg.GetProtocolMessage())
 	}
 }
 
@@ -454,16 +455,17 @@ func (b *Bwhatsapp) handleDocumentMessage(msg *events.Message) {
 	b.Remote <- rmsg
 }
 
-func (b *Bwhatsapp) handleDelete(messageInfo *proto.ProtocolMessage) {
-	sender, _ := types.ParseJID(*messageInfo.Key.Participant)
+func (b *Bwhatsapp) handleDelete(info types.MessageInfo, protocolMessage *waE2E.ProtocolMessage) {
+	key := protocolMessage.GetKey()
+	sender := deletedMessageSender(key)
 
 	rmsg := config.Message{
 		Account:  b.Account,
 		Protocol: b.Protocol,
-		ID:       getMessageIdFormat(sender, *messageInfo.Key.ID),
+		ID:       getMessageIdFormat(sender, key.GetID()),
 		Event:    config.EventMsgDelete,
 		Text:     config.EventMsgDelete,
-		Channel:  *messageInfo.Key.RemoteJID,
+		Channel:  b.chatJID(info).String(),
 	}
 
 	b.Log.Debugf("<= Sending message from %s to gateway", b.Account)

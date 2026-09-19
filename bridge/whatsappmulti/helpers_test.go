@@ -54,3 +54,29 @@ func TestResolveChatJID(t *testing.T) {
 		})
 	}
 }
+
+type fakeKey struct{ participant, remote string }
+
+func (k fakeKey) GetParticipant() string { return k.participant }
+func (k fakeKey) GetRemoteJID() string   { return k.remote }
+
+func TestDeletedMessageSender(t *testing.T) {
+	tests := []struct {
+		name string
+		key  fakeKey
+		want types.JID
+	}{
+		{"group message names the participant", fakeKey{testLID.String(), testGroup.String()}, testLID},
+		{"1:1 message falls back to the remote party", fakeKey{"", testPhone.String()}, testPhone},
+		{"1:1 LID message falls back to the remote LID", fakeKey{"", testLID.String()}, testLID},
+		{"empty key yields an empty JID", fakeKey{"", ""}, types.EmptyJID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deletedMessageSender(tt.key); got != tt.want {
+				t.Errorf("deletedMessageSender() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

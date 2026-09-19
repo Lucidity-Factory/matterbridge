@@ -157,6 +157,26 @@ func resolveChatJID(info types.MessageInfo, lookup func(types.JID) (types.JID, e
 	return info.Chat
 }
 
+// messageKey is the part of a revoked message's key needed to find its sender.
+type messageKey interface {
+	GetParticipant() string
+	GetRemoteJID() string
+}
+
+// deletedMessageSender returns the sender of a revoked message. The key names a
+// participant only for group messages; in a 1:1 chat the sender is the remote
+// party, and reading the participant there would dereference a nil pointer.
+func deletedMessageSender(key messageKey) types.JID {
+	id := key.GetParticipant()
+	if id == "" {
+		id = key.GetRemoteJID()
+	}
+
+	sender, _ := types.ParseJID(id)
+
+	return sender
+}
+
 func (b *Bwhatsapp) chatJID(info types.MessageInfo) types.JID {
 	return resolveChatJID(info, func(lid types.JID) (types.JID, error) {
 		return b.wc.Store.LIDs.GetPNForLID(context.Background(), lid)
