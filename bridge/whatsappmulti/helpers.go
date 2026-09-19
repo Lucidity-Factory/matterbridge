@@ -134,6 +134,35 @@ func isPrivateJid(identifier string) bool {
 		strings.HasSuffix(identifier, "@"+types.HiddenUserServer)
 }
 
+// resolveChatJID returns the JID under which a message's chat is reported to the
+// gateway. WhatsApp increasingly addresses direct messages by LID; when the phone
+// number JID for that LID is known, it is returned instead, so that the message
+// originates from the phone number channel configured in the gateway and is not
+// relayed back to the sender through it. Group chats, phone number chats and LIDs
+// with no known phone number are returned unchanged.
+func resolveChatJID(info types.MessageInfo, lookup func(types.JID) (types.JID, error)) types.JID {
+	if info.IsGroup || info.Chat.Server != types.HiddenUserServer {
+		return info.Chat
+	}
+
+	if !info.SenderAlt.IsEmpty() && info.SenderAlt.Server == types.DefaultUserServer {
+		return info.SenderAlt.ToNonAD()
+	}
+
+	pn, err := lookup(info.Chat)
+	if err == nil && !pn.IsEmpty() && pn.Server == types.DefaultUserServer {
+		return pn.ToNonAD()
+	}
+
+	return info.Chat
+}
+
+func (b *Bwhatsapp) chatJID(info types.MessageInfo) types.JID {
+	return resolveChatJID(info, func(lid types.JID) (types.JID, error) {
+		return b.wc.Store.LIDs.GetPNForLID(context.Background(), lid)
+	})
+}
+
 func (b *Bwhatsapp) getDevice() (*store.Device, error) {
 	device := &store.Device{}
 

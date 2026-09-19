@@ -46,6 +46,8 @@ To setup a gateway between two protocols in matterbridge, you need to specify a 
 
 1:1 chats are not checked against the joined groups. If the contact is not in the account's contact list, a warning is logged and the bridge continues.
 
+Incoming direct messages addressed by LID are reported to the gateway under the contact's phone number JID whenever that number is known (from the message itself or from the session store), so one `@s.whatsapp.net` channel covers a contact in both forms. Without this, a contact configured as both an `inout` phone channel and an `in` LID channel would receive their own messages back through the phone channel. A `@lid` channel is only needed for a contact whose phone number is not known to the session.
+
 ### How to set a nice channel name?
 
 Use `tengo`:
