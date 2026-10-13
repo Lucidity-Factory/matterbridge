@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime"
 	"strings"
+	"time"
 
 	"github.com/matterbridge-org/matterbridge/bridge/config"
 	"github.com/matterbridge-org/matterbridge/bridge/helper"
@@ -22,6 +23,18 @@ func (b *Bwhatsapp) eventHandler(evt any) {
 		b.handleMessage(e)
 	case *events.GroupInfo:
 		b.handleGroupInfo(e)
+	case *events.Connected:
+		b.Log.Info("WhatsApp login successful")
+	case *events.LoggedOut:
+		b.Log.Warnf("WhatsApp logged out (reason: %s, on connect: %t); re-pairing is needed", e.Reason, e.OnConnect)
+	case *events.StreamReplaced:
+		b.Log.Warn("WhatsApp stream replaced: another client connected with this session")
+	case *events.Disconnected:
+		b.Log.Info("WhatsApp disconnected")
+	case *events.KeepAliveTimeout:
+		b.Log.Warnf("WhatsApp keepalive timeout (errors: %d, last success: %s)", e.ErrorCount, e.LastSuccess.Format(time.RFC3339))
+	case *events.KeepAliveRestored:
+		b.Log.Info("WhatsApp keepalive restored")
 	}
 }
 

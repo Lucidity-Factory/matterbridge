@@ -117,7 +117,9 @@ func (b *Bwhatsapp) Connect() error {
 		}
 	}
 
-	b.Log.Infoln("WhatsApp connection successful")
+	// Connect returns once the socket is up; login success or failure is
+	// reported separately through the Connected and LoggedOut events.
+	b.Log.Infoln("WhatsApp socket connected")
 
 	b.contacts, err = b.wc.Store.Contacts.GetAllContacts(context.Background())
 	if err != nil {
