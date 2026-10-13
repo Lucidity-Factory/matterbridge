@@ -1526,6 +1526,20 @@ RemoteNickFormat="@{NICK}: "
 # optional (default empty)
 Label="Organization"
 
+# Presence sent after each login and push name change: "off", "unavailable" or "blip"
+# ("available" for PresenceBlipSeconds, then "unavailable").
+# The primary phone gets no push notifications while the bridge is available.
+# optional (default "off")
+PresenceMode="off"
+
+# How long "available" is held in blip mode; 0 or less uses the default
+# optional (default 5)
+PresenceBlipSeconds=5
+
+# Repeat the presence update every N hours; 0 only sends it after login and push name changes
+# optional (default 0)
+PresenceIntervalHours=0
+
 
 
 ###################################################################

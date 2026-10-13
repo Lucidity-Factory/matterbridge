@@ -37,6 +37,7 @@ type Bwhatsapp struct {
 	users        map[string]types.ContactInfo
 	userAvatars  map[string]string
 	joinedGroups []*types.GroupInfo
+	presence     *presenceKeeper
 
 	// loginCh receives the login result of the current Connect.
 	loginCh atomic.Pointer[chan error]
@@ -79,8 +80,19 @@ func (b *Bwhatsapp) Connect() error {
 
 	b.Log.Debugln("Connecting to WhatsApp..")
 
+	// Stop the keeper of a previous successful Connect, if Disconnect was
+	// not called in between.
+	b.presence.stop()
+
 	b.wc = whatsmeow.NewClient(device, waLog.Stdout("Client", "INFO", true))
 	b.wc.AddEventHandler(b.eventHandler)
+
+	// The handler is registered now so that no Connected event is missed;
+	// the keeper buffers the trigger and only starts once Connect succeeds.
+	b.presence = b.newPresenceKeeper(b.wc)
+	if b.presence != nil {
+		b.wc.AddEventHandler(b.presence.handleEvent)
+	}
 
 	var qrChan <-chan whatsmeow.QRChannelItem
 	if b.wc.Store.ID == nil {
@@ -132,12 +144,15 @@ func (b *Bwhatsapp) Connect() error {
 
 	b.loadUsers()
 
+	b.presence.start()
+
 	return nil
 }
 
 // Disconnect is called while reconnecting to the bridge
 // Required implementation of the Bridger interface
 func (b *Bwhatsapp) Disconnect() error {
+	b.presence.stop()
 	b.wc.Disconnect()
 
 	return nil
