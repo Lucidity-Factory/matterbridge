@@ -18,6 +18,10 @@ import (
 
 // nolint:gocritic
 func (b *Bwhatsapp) eventHandler(evt any) {
+	if done, err := loginResult(evt); done {
+		b.signalLogin(err)
+	}
+
 	switch e := evt.(type) {
 	case *events.Message:
 		b.handleMessage(e)

@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"mime"
-	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/matterbridge-org/matterbridge/bridge"
 	"github.com/matterbridge-org/matterbridge/bridge/config"
-	"github.com/mdp/qrterminal"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/binary/proto"
@@ -38,6 +37,9 @@ type Bwhatsapp struct {
 	users        map[string]types.ContactInfo
 	userAvatars  map[string]string
 	joinedGroups []*types.GroupInfo
+
+	// loginCh receives the login result of the current Connect.
+	loginCh atomic.Pointer[chan error]
 }
 
 type Replyable struct {
@@ -80,84 +82,55 @@ func (b *Bwhatsapp) Connect() error {
 	b.wc = whatsmeow.NewClient(device, waLog.Stdout("Client", "INFO", true))
 	b.wc.AddEventHandler(b.eventHandler)
 
-	firstlogin := false
 	var qrChan <-chan whatsmeow.QRChannelItem
 	if b.wc.Store.ID == nil {
-		firstlogin = true
 		qrChan, err = b.wc.GetQRChannel(context.Background())
 		if err != nil && !errors.Is(err, whatsmeow.ErrQRStoreContainsID) {
 			return errors.New("failed to to get QR channel:" + err.Error())
 		}
 	}
 
+	// eventHandler reports the login result here. The server ends a new
+	// pairing with a 515 stream error, after which whatsmeow reconnects and
+	// logs in by itself; disconnecting before that makes WhatsApp drop the
+	// new device. So nothing is fetched until Connected arrives.
+	loginCh := make(chan error, 1)
+	b.loginCh.Store(&loginCh)
+
 	err = b.wc.Connect()
 	if err != nil {
 		return errors.New("failed to connect to WhatsApp: " + err.Error())
-	}
-
-	if b.wc.Store.ID == nil {
-		for evt := range qrChan {
-			if evt.Event == "code" {
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
-			} else {
-				b.Log.Infof("QR channel result: %s", evt.Event)
-			}
-		}
-	}
-
-	// disconnect and reconnect on our first login/pairing
-	// for some reason the GetJoinedGroups in JoinChannel doesn't work on first login
-	if firstlogin {
-		b.wc.Disconnect()
-		time.Sleep(time.Second)
-
-		err = b.wc.Connect()
-		if err != nil {
-			return errors.New("failed to connect to WhatsApp: " + err.Error())
-		}
 	}
 
 	// Connect returns once the socket is up; login success or failure is
 	// reported separately through the Connected and LoggedOut events.
 	b.Log.Infoln("WhatsApp socket connected")
 
+	if qrChan != nil {
+		err = waitForQR(qrChan, qrDeadline, b.handleQREvent)
+		if err != nil {
+			return b.failConnect(err)
+		}
+	}
+
+	err = b.awaitLogin(loginCh)
+	if err != nil {
+		return b.failConnect(err)
+	}
+
 	b.contacts, err = b.wc.Store.Contacts.GetAllContacts(context.Background())
 	if err != nil {
-		return errors.New("failed to get contacts: " + err.Error())
+		return b.failConnect(fmt.Errorf("failed to get contacts: %w", err))
 	}
 
 	b.joinedGroups, err = b.wc.GetJoinedGroups(context.Background())
 	if err != nil {
-		return errors.New("failed to get list of joined groups: " + err.Error())
+		return b.failConnect(fmt.Errorf("failed to get list of joined groups: %w", err))
 	}
 
 	b.startedAt = time.Now()
 
-	// map all the users
-	for id, contact := range b.contacts {
-		if !isGroupJid(id.String()) && id.String() != "status@broadcast" {
-			// it is user
-			b.users[id.String()] = contact
-		}
-	}
-
-	// get user avatar asynchronously
-	b.Log.Info("Getting user avatars..")
-
-	for jid := range b.users {
-		info, err := b.GetProfilePicThumb(jid)
-		if err != nil {
-			b.Log.Warnf("Could not get profile photo of %s: %v", jid, err)
-		} else {
-			b.Lock()
-			if info != nil {
-				b.userAvatars[jid] = info.URL
-			}
-			b.Unlock()
-		}
-	}
-
-	b.Log.Info("Finished getting avatars..")
+	b.loadUsers()
 
 	return nil
 }
