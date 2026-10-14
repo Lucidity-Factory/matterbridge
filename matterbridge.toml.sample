@@ -1526,6 +1526,26 @@ RemoteNickFormat="@{NICK}: "
 # optional (default empty)
 Label="Organization"
 
+# Presence sent after each login and push name change: "off", "unavailable", "blip"
+# ("available" for PresenceBlipSeconds, then "unavailable"), "available" (always online)
+# or "active" (online after each message the bridge sends, offline after
+# PresenceActiveMinutes without one).
+# optional (default "off")
+PresenceMode="off"
+
+# How long "available" is held in blip mode; 0 or less uses the default
+# optional (default 5)
+PresenceBlipSeconds=5
+
+# Repeat the presence update every N hours; 0 only sends it after login and push name changes.
+# Ignored in active mode.
+# optional (default 0)
+PresenceIntervalHours=0
+
+# How long "available" is held in active mode after the last message sent; 0 or less uses the default
+# optional (default 5)
+PresenceActiveMinutes=5
+
 
 
 ###################################################################
