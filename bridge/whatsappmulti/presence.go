@@ -22,6 +22,7 @@ const (
 	presenceModeOff         = "off"
 	presenceModeUnavailable = "unavailable"
 	presenceModeBlip        = "blip"
+	presenceModeAvailable   = "available"
 
 	defaultPresenceBlip = 5 * time.Second
 	presenceSendTimeout = 10 * time.Second
@@ -65,7 +66,7 @@ func newPresenceKeeper(client presenceClient, log *logrus.Entry, mode string, bl
 	switch mode {
 	case "", presenceModeOff:
 		return nil
-	case presenceModeUnavailable, presenceModeBlip:
+	case presenceModeUnavailable, presenceModeBlip, presenceModeAvailable:
 	default:
 		log.Warnf("Unknown %s %q, presence updates disabled", cfgPresenceMode, mode)
 
@@ -111,7 +112,24 @@ func (p *presenceKeeper) start() {
 
 	p.log.Infof("Presence mode %q (blip %s, interval %s)", p.mode, p.blip, p.interval)
 
+	if p.mode == presenceModeAvailable {
+		p.warnAvailable()
+	}
+
 	go p.run(ctx)
+}
+
+// warnAvailable logs the costs of staying available. Without an interval, a
+// send that fails while the socket stays up is not retried until the next
+// login or push name change.
+func (p *presenceKeeper) warnAvailable() {
+	msg := "PresenceMode available keeps the bridge online while connected; " +
+		"the primary phone may not get push notifications"
+	if p.interval == 0 {
+		msg += "; set " + cfgPresenceIntervalHours + " so a failed send is retried while connected"
+	}
+
+	p.log.Warn(msg)
 }
 
 // stop ends the run loop and waits briefly for it, so that an interrupted
@@ -198,8 +216,15 @@ func (p *presenceKeeper) update(ctx context.Context, reason string) {
 		return
 	}
 
-	if p.mode == presenceModeUnavailable {
+	switch p.mode {
+	case presenceModeUnavailable:
 		p.sendUnavailable(ctx, reason)
+
+		return
+	case presenceModeAvailable:
+		// Stays available: no "unavailable" follows, even after a failure,
+		// and none is sent when the keeper stops.
+		_ = p.send(ctx, types.PresenceAvailable, reason)
 
 		return
 	}

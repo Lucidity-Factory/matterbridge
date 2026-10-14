@@ -2,6 +2,7 @@ package bwhatsapp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -493,4 +494,96 @@ func TestPresenceKeeperStopWithoutStart(t *testing.T) {
 
 	require.NotNil(t, p)
 	assert.NotPanics(t, p.stop)
+}
+
+// availableBlip is short so that available mode wrongly taking the blip path
+// sends "unavailable" well within the tests' waits.
+const availableBlip = 10 * time.Millisecond
+
+var errSendFailed = errors.New("send failed")
+
+func TestPresenceKeeperAvailableModeAccepted(t *testing.T) {
+	log, _ := newTestLogger()
+	p := newPresenceKeeper(newFakePresenceClient(true), log, "available", availableBlip, 0)
+
+	require.NotNil(t, p)
+	assert.Equal(t, "available", p.mode)
+}
+
+func TestPresenceKeeperAvailableOnLogin(t *testing.T) {
+	client := newFakePresenceClient(true)
+	log, _ := newTestLogger()
+	p := newPresenceKeeper(client, log, "available", availableBlip, 0)
+
+	p.start()
+
+	p.handleEvent(&events.Connected{})
+
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+	client.expectNoCall(t, 200*time.Millisecond)
+
+	p.stop()
+
+	assert.Equal(t, []types.Presence{types.PresenceAvailable}, client.sentStates())
+}
+
+func TestPresenceKeeperAvailableFailureSendsNothingElse(t *testing.T) {
+	client := newFakePresenceClient(true)
+	client.errs[types.PresenceAvailable] = errSendFailed
+	log, hook := newTestLogger()
+	p := newPresenceKeeper(client, log, "available", availableBlip, 0)
+
+	p.start()
+
+	p.handleEvent(&events.Connected{})
+
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+	client.expectNoCall(t, 200*time.Millisecond)
+
+	p.stop()
+
+	assert.Equal(t, []types.Presence{types.PresenceAvailable}, client.sentStates())
+	assert.Equal(t, 1, countEntries(hook, logrus.WarnLevel, "Failed to send presence available"))
+}
+
+func TestPresenceKeeperAvailableStartWarns(t *testing.T) {
+	cases := []struct {
+		mode        string
+		interval    time.Duration
+		pushWarns   int
+		intervalTip int
+	}{
+		{mode: "available", interval: 0, pushWarns: 1, intervalTip: 1},
+		{mode: "available", interval: time.Hour, pushWarns: 1, intervalTip: 0},
+		{mode: "blip", interval: 0, pushWarns: 0, intervalTip: 0},
+	}
+
+	for _, tc := range cases {
+		log, hook := newTestLogger()
+		p := newPresenceKeeper(newFakePresenceClient(true), log, tc.mode, availableBlip, tc.interval)
+
+		p.start()
+		p.stop()
+
+		assert.Equal(t, tc.pushWarns, countEntries(hook, logrus.WarnLevel, "push notifications"),
+			"mode %s, interval %s", tc.mode, tc.interval)
+		assert.Equal(t, tc.intervalTip, countEntries(hook, logrus.WarnLevel, "set PresenceIntervalHours"),
+			"mode %s, interval %s", tc.mode, tc.interval)
+	}
+}
+
+func TestPresenceKeeperAvailableStopSendsNothing(t *testing.T) {
+	client := newFakePresenceClient(true)
+	log, hook := newTestLogger()
+	p := newPresenceKeeper(client, log, "available", time.Hour, 0)
+
+	p.start()
+
+	p.handleEvent(&events.Connected{})
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	p.stop()
+
+	assert.Equal(t, []types.Presence{types.PresenceAvailable}, client.sentStates())
+	assert.Zero(t, countEntries(hook, logrus.WarnLevel, "did not stop in time"))
 }

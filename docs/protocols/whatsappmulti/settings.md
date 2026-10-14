@@ -44,12 +44,34 @@ sent then.
   account's push name without marking the bridge as online.
 - `blip`: send "available", wait `PresenceBlipSeconds`, then send
   "unavailable".
+- `available`: send "available" and never "unavailable", so the bridge
+  stays online for as long as it is connected. See the caveats below.
 
 While the bridge is marked as available, delivery receipts for incoming
-messages are sent as "active" rather than "inactive", and the primary phone
-has been reported not to receive push notifications (whatsmeow issues #262
-and #605), so keep the blip short. If sending "available" fails for any
+messages are sent as "active" rather than "inactive" (the bridge sends no
+read receipts), and the primary phone has been reported not to receive push
+notifications (whatsmeow issues #262 and #605).
+
+In `blip` mode, keep the blip short. If sending "available" fails for any
 reason other than a missing push name, "unavailable" is sent straight away.
+
+`available` mode has these costs for as long as the bridge runs:
+
+- The primary phone may get no push notifications for new messages. This is
+  reported, not confirmed: in the issues above, one user found that
+  "unavailable" restored notifications and another saw no difference.
+- Contacts see the account as online while the bridge is connected, subject
+  to the account's privacy settings.
+- Delivery receipts are sent as "active" once the first update has been sent.
+- WhatsApp only sends typing notifications to clients that are online, so
+  the bridge may start receiving them. The bridge ignores them, but the
+  WhatsApp library may log warnings about ones it cannot parse.
+
+In `available` mode a failed send is not followed by "unavailable"; it is
+retried on the next login, push name change or interval. Set
+`PresenceIntervalHours` with this mode: without it, a send that fails while
+the connection stays up is not retried until the next login. Nothing is sent
+when the bridge stops.
 
 - Setting: **OPTIONAL**
 - Format: *string*
@@ -61,8 +83,8 @@ reason other than a missing push name, "unavailable" is sent straight away.
 
 ## PresenceBlipSeconds
 
-How long the bridge stays "available" in `blip` mode. A value of `0` or less
-uses the default.
+How long the bridge stays "available" in `blip` mode. Other modes ignore
+it. A value of `0` or less uses the default.
 
 - Setting: **OPTIONAL**
 - Format: *int*
