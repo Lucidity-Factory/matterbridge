@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,11 +30,12 @@ import (
 // (socket/noisesocket.go:91-110) returns ctx.Err() for a cancelled context.
 // Only a send that gets past these checks is recorded.
 //
-// pushName, connected, loggedIn, errs, block and blockState are set before
-// the keeper starts and are not changed afterwards.
+// pushName, loggedIn, block and blockState are set before the keeper starts
+// and are not changed afterwards. connected and errs may change while it runs,
+// through connected.Store and setErr.
 type fakePresenceClient struct {
 	pushName  bool
-	connected bool
+	connected atomic.Bool
 	loggedIn  bool
 	errs      map[types.Presence]error
 
@@ -50,14 +52,16 @@ type fakePresenceClient struct {
 }
 
 func newFakePresenceClient(loggedIn bool) *fakePresenceClient {
-	return &fakePresenceClient{
-		pushName:  true,
-		connected: true,
-		loggedIn:  loggedIn,
-		errs:      map[types.Presence]error{},
-		blocked:   make(chan struct{}, 16),
-		calls:     make(chan types.Presence, 16),
+	f := &fakePresenceClient{
+		pushName: true,
+		loggedIn: loggedIn,
+		errs:     map[types.Presence]error{},
+		blocked:  make(chan struct{}, 16),
+		calls:    make(chan types.Presence, 64),
 	}
+	f.connected.Store(true)
+
+	return f
 }
 
 func (f *fakePresenceClient) SendPresence(ctx context.Context, state types.Presence) error {
@@ -65,7 +69,7 @@ func (f *fakePresenceClient) SendPresence(ctx context.Context, state types.Prese
 		return whatsmeow.ErrNoPushName
 	}
 
-	if !f.connected {
+	if !f.connected.Load() {
 		return whatsmeow.ErrNotConnected
 	}
 
@@ -96,11 +100,18 @@ func (f *fakePresenceClient) SendPresence(ctx context.Context, state types.Prese
 }
 
 func (f *fakePresenceClient) IsConnected() bool {
-	return f.connected
+	return f.connected.Load()
 }
 
 func (f *fakePresenceClient) IsLoggedIn() bool {
 	return f.loggedIn
+}
+
+func (f *fakePresenceClient) setErr(state types.Presence, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.errs[state] = err
 }
 
 func (f *fakePresenceClient) sentStates() []types.Presence {
@@ -310,12 +321,12 @@ func TestPresenceKeeperSkipsWhenNotConnectedOrNotLoggedIn(t *testing.T) {
 
 	for _, tc := range cases {
 		client := newFakePresenceClient(tc.loggedIn)
-		client.connected = tc.connected
+		client.connected.Store(tc.connected)
 		log, hook := newTestLogger()
 		log.Logger.SetLevel(logrus.DebugLevel)
 		p := newPresenceKeeper(client, log, "blip", 10*time.Millisecond, 0)
 
-		p.update(context.Background(), "event")
+		p.onTrigger(context.Background())
 
 		assert.Empty(t, client.sentStates(), tc.name)
 		assert.Equal(t, 1, countEntries(hook, logrus.DebugLevel, "Skipping presence update (event)"), tc.name)
@@ -351,7 +362,7 @@ func TestPresenceKeeperNoPushName(t *testing.T) {
 	log, hook := newTestLogger()
 	p := newPresenceKeeper(client, log, "blip", 10*time.Millisecond, 0)
 
-	p.update(context.Background(), "event")
+	p.onTrigger(context.Background())
 
 	// whatsmeow refuses before changing anything, so there is no
 	// "unavailable" to follow up with: one warning, nothing sent.
@@ -586,4 +597,372 @@ func TestPresenceKeeperAvailableStopSendsNothing(t *testing.T) {
 
 	assert.Equal(t, []types.Presence{types.PresenceAvailable}, client.sentStates())
 	assert.Zero(t, countEntries(hook, logrus.WarnLevel, "did not stop in time"))
+}
+
+// activeIdle is long against the scheduling jitter of -race runs, so that a
+// timer that should not fire yet does not.
+const activeIdle = 300 * time.Millisecond
+
+func newActiveKeeper(t *testing.T, client *fakePresenceClient) (*presenceKeeper, *logrustest.Hook) {
+	t.Helper()
+
+	log, hook := newTestLogger()
+	log.Logger.SetLevel(logrus.DebugLevel)
+	p := newPresenceKeeper(client, log, "active", time.Second, 0)
+	require.NotNil(t, p)
+	p.setActive(activeIdle)
+
+	return p, hook
+}
+
+func (f *fakePresenceClient) timesSent() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]time.Time(nil), f.at...)
+}
+
+func waitForEntry(t *testing.T, hook *logrustest.Hook, level logrus.Level, substr string) {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for countEntries(hook, level, substr) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for log entry %q", substr)
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestPresenceKeeperActiveConfig(t *testing.T) {
+	cases := []struct {
+		minutes string
+		want    time.Duration
+	}{
+		{"7", 7 * time.Minute},
+		{"0", defaultPresenceActive},
+		{"-1", defaultPresenceActive},
+	}
+
+	for _, tc := range cases {
+		log, hook := newTestLogger()
+		input := "[whatsapp.test]\nPresenceMode=\"active\"\nPresenceIntervalHours=3\nPresenceActiveMinutes=" + tc.minutes + "\n"
+		b := &Bwhatsapp{Config: &bridge.Config{Bridge: &bridge.Bridge{
+			Account: "whatsapp.test",
+			Config:  config.NewConfigFromString(log.Logger, []byte(input)),
+			Log:     log,
+		}}}
+
+		p := b.newPresenceKeeper(newFakePresenceClient(true))
+
+		require.NotNil(t, p, tc.minutes)
+		assert.Equal(t, tc.want, p.active, tc.minutes)
+		assert.Equal(t, time.Duration(0), p.interval, "the interval is ignored in active mode")
+		assert.Equal(t, 1, countEntries(hook, logrus.InfoLevel, "PresenceIntervalHours is ignored"), tc.minutes)
+	}
+}
+
+func TestPresenceKeeperActiveGoesOnlineThenIdles(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.markActive()
+
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+
+	at := client.timesSent()
+	assert.GreaterOrEqual(t, at[1].Sub(at[0]), activeIdle, "online for the idle time")
+}
+
+func TestPresenceKeeperActiveExtends(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.markActive()
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	var last time.Time
+
+	for range 5 {
+		time.Sleep(30 * time.Millisecond)
+
+		last = time.Now()
+
+		p.markActive()
+	}
+
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+
+	at := client.timesSent()
+	assert.GreaterOrEqual(t, at[1].Sub(last), activeIdle, "the idle time runs from the last send")
+	client.expectNoCall(t, 100*time.Millisecond)
+}
+
+func TestPresenceKeeperActiveLoginWhileOffline(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.handleEvent(&events.Connected{})
+
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+	client.expectNoCall(t, 100*time.Millisecond)
+}
+
+func TestPresenceKeeperActiveLoginWhileOnline(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.markActive()
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	p.handleEvent(&events.Connected{})
+
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+}
+
+func TestPresenceKeeperActiveFailedAvailable(t *testing.T) {
+	client := newFakePresenceClient(true)
+	client.setErr(types.PresenceAvailable, errSendFailed)
+	p, _ := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.markActive()
+
+	// "unavailable" follows straight away, not after the idle time.
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+
+	// Offline again, so the next send retries.
+	p.markActive()
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+}
+
+func TestPresenceKeeperActiveNoPushName(t *testing.T) {
+	client := newFakePresenceClient(true)
+	client.pushName = false
+	p, hook := newActiveKeeper(t, client)
+	ctx := context.Background()
+
+	p.onActivity(ctx)
+	p.onActivity(ctx)
+
+	// Each attempt warns once and nothing follows it; the bridge stays
+	// offline, so the second send tries again.
+	assert.Empty(t, client.sentStates())
+	assert.Equal(t, 2, countEntries(hook, logrus.WarnLevel, whatsmeow.ErrNoPushName.Error()))
+	assert.False(t, p.online)
+}
+
+func TestPresenceKeeperActiveRefreshFailure(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.markActive()
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	client.setErr(types.PresenceAvailable, errSendFailed)
+	p.handleEvent(&events.Connected{})
+
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+
+	// Offline now: the old deadline must not send a second "unavailable".
+	client.expectNoCall(t, activeIdle+100*time.Millisecond)
+}
+
+func TestPresenceKeeperActiveStopWhileOnline(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, hook := newActiveKeeper(t, client)
+
+	p.start()
+
+	p.markActive()
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	p.stop()
+
+	assert.Equal(t, []types.Presence{types.PresenceAvailable, types.PresenceUnavailable}, client.sentStates())
+	assert.Zero(t, countEntries(hook, logrus.WarnLevel, "did not stop in time"))
+}
+
+func TestPresenceKeeperActiveStopDuringAvailableSend(t *testing.T) {
+	client := newFakePresenceClient(true)
+	client.block = make(chan struct{})
+	client.blockState = types.PresenceAvailable
+	p, hook := newActiveKeeper(t, client)
+
+	p.start()
+
+	p.markActive()
+	client.waitBlocked(t)
+
+	p.stop()
+
+	assert.Equal(t, []types.Presence{types.PresenceUnavailable}, client.sentStates())
+	assert.Zero(t, countEntries(hook, logrus.WarnLevel, "did not stop in time"))
+}
+
+func TestPresenceKeeperActiveSkipsWhenDisconnected(t *testing.T) {
+	client := newFakePresenceClient(true)
+	client.connected.Store(false)
+	p, hook := newActiveKeeper(t, client)
+
+	p.onActivity(context.Background())
+
+	assert.Empty(t, client.sentStates())
+	assert.False(t, p.online)
+	assert.Equal(t, 1, countEntries(hook, logrus.DebugLevel, "Skipping presence update (activity)"))
+}
+
+func TestPresenceKeeperActiveIdleWhileDisconnected(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, hook := newActiveKeeper(t, client)
+
+	p.start()
+	defer p.stop()
+
+	p.markActive()
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	client.connected.Store(false)
+	waitForEntry(t, hook, logrus.DebugLevel, "Skipping presence update (idle)")
+
+	client.connected.Store(true)
+	p.handleEvent(&events.Connected{})
+
+	// The deadline passed while disconnected, so the bridge is offline and
+	// the login sends "unavailable", not "available".
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+	client.expectNoCall(t, 100*time.Millisecond)
+}
+
+func TestPresenceKeeperActiveTimerYieldsToPendingSend(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+
+	p.online = true
+	p.until = time.Now()
+	p.armTimer()
+
+	defer p.clear()
+
+	before := p.until
+	p.activity <- struct{}{}
+
+	p.onTimer(context.Background())
+
+	assert.Empty(t, client.sentStates())
+	assert.True(t, p.online)
+	assert.True(t, p.until.After(before), "the deadline moves out")
+}
+
+func TestPresenceKeeperBlipIgnoresActivity(t *testing.T) {
+	client := newFakePresenceClient(true)
+	log, _ := newTestLogger()
+	p := newPresenceKeeper(client, log, "blip", time.Hour, 0)
+
+	p.markActive()
+	p.onActivity(context.Background())
+
+	assert.Empty(t, client.sentStates())
+	assert.False(t, p.online)
+	assert.Empty(t, p.activity, "markActive does not queue outside active mode")
+}
+
+func TestPresenceKeeperBlipTriggerWhileOnline(t *testing.T) {
+	client := newFakePresenceClient(true)
+	log, _ := newTestLogger()
+	p := newPresenceKeeper(client, log, "blip", time.Hour, 0)
+
+	p.online = true
+	p.until = time.Now().Add(300 * time.Millisecond)
+	until := p.until
+
+	p.onTrigger(context.Background())
+
+	// "available" again, and the deadline is unchanged.
+	assert.Equal(t, []types.Presence{types.PresenceAvailable}, client.sentStates())
+	assert.True(t, p.online)
+	assert.Equal(t, until, p.until)
+}
+
+func TestPresenceKeeperBlipLoginDuringBlip(t *testing.T) {
+	const blip = 300 * time.Millisecond
+
+	client := newFakePresenceClient(true)
+	log, _ := newTestLogger()
+	p := newPresenceKeeper(client, log, "blip", blip, 0)
+
+	p.start()
+	defer p.stop()
+
+	p.handleEvent(&events.Connected{})
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	// Late in the blip, so that extending it would be measurable.
+	time.Sleep(2 * blip / 3)
+	p.handleEvent(&events.PushNameSetting{})
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	// One "unavailable" at the original deadline, and no second blip.
+	assert.Equal(t, types.PresenceUnavailable, client.waitCall(t))
+
+	at := client.timesSent()
+	gap := at[2].Sub(at[0])
+	assert.GreaterOrEqual(t, gap, blip)
+	assert.Less(t, gap, blip+blip/2, "the blip is not extended")
+	client.expectNoCall(t, blip+100*time.Millisecond)
+}
+
+func TestPresenceKeeperBlipEndsWhileDisconnected(t *testing.T) {
+	client := newFakePresenceClient(true)
+	log, hook := newTestLogger()
+	log.Logger.SetLevel(logrus.DebugLevel)
+	p := newPresenceKeeper(client, log, "blip", 50*time.Millisecond, 0)
+
+	p.start()
+	defer p.stop()
+
+	p.handleEvent(&events.Connected{})
+	assert.Equal(t, types.PresenceAvailable, client.waitCall(t))
+
+	client.connected.Store(false)
+	waitForEntry(t, hook, logrus.DebugLevel, "Skipping presence update (idle)")
+
+	assert.Equal(t, []types.Presence{types.PresenceAvailable}, client.sentStates())
+	assert.Zero(t, countEntries(hook, logrus.WarnLevel, ""), "no failed send to warn about")
+}
+
+func TestNoteSentMarksActivity(t *testing.T) {
+	client := newFakePresenceClient(true)
+	p, _ := newActiveKeeper(t, client)
+	b := &Bwhatsapp{presence: p}
+
+	b.noteSent(errSendFailed)
+	assert.Empty(t, p.activity, "a failed send is not activity")
+
+	b.noteSent(nil)
+	assert.Len(t, p.activity, 1)
+
+	assert.NotPanics(t, func() { (&Bwhatsapp{}).noteSent(nil) }, "presence off")
 }

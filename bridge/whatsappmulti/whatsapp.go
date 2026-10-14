@@ -263,6 +263,7 @@ func (b *Bwhatsapp) PostDocumentMessage(msg config.Message, filetype string) (st
 
 	ID := whatsmeow.GenerateMessageID()
 	_, err = b.wc.SendMessage(context.TODO(), groupJID, &message, whatsmeow.SendRequestExtra{ID: ID})
+	b.noteSent(err)
 
 	return ID, err
 }
@@ -374,6 +375,7 @@ func (b *Bwhatsapp) PostAudioMessage(msg config.Message, filetype string) (strin
 
 	captionID := whatsmeow.GenerateMessageID()
 	_, err = b.wc.SendMessage(context.TODO(), groupJID, &captionMessage, whatsmeow.SendRequestExtra{ID: captionID})
+	b.noteSent(err)
 
 	return ID, err
 }
@@ -396,6 +398,7 @@ func (b *Bwhatsapp) Send(msg config.Message) (string, error) {
 		}
 
 		_, err := b.wc.RevokeMessage(context.Background(), groupJID, msg.ID)
+		b.noteSent(err)
 
 		return "", err
 	}
@@ -463,6 +466,14 @@ func (b *Bwhatsapp) sendMessage(rmsg config.Message, message *proto.Message) (st
 	ID := whatsmeow.GenerateMessageID()
 
 	_, err := b.wc.SendMessage(context.Background(), groupJID, message, whatsmeow.SendRequestExtra{ID: ID})
+	b.noteSent(err)
 
 	return getMessageIdFormat(*b.wc.Store.ID, ID), err
+}
+
+// noteSent tells the presence keeper about a message sent to WhatsApp.
+func (b *Bwhatsapp) noteSent(err error) {
+	if err == nil {
+		b.presence.markActive()
+	}
 }

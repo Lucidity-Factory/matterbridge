@@ -18,19 +18,29 @@ const (
 	cfgPresenceMode          = "PresenceMode"
 	cfgPresenceBlipSeconds   = "PresenceBlipSeconds"
 	cfgPresenceIntervalHours = "PresenceIntervalHours"
+	cfgPresenceActiveMinutes = "PresenceActiveMinutes"
 
 	presenceModeOff         = "off"
 	presenceModeUnavailable = "unavailable"
 	presenceModeBlip        = "blip"
 	presenceModeAvailable   = "available"
+	presenceModeActive      = "active"
 
-	defaultPresenceBlip = 5 * time.Second
-	presenceSendTimeout = 10 * time.Second
-	presenceStopTimeout = 2 * time.Second
+	defaultPresenceBlip   = 5 * time.Second
+	defaultPresenceActive = 5 * time.Minute
+	presenceSendTimeout   = 10 * time.Second
+	presenceStopTimeout   = 2 * time.Second
 
 	// presenceStopSendTimeout bounds an "unavailable" send once the keeper
 	// is stopping, so that it fits within presenceStopTimeout.
 	presenceStopSendTimeout = 1500 * time.Millisecond
+
+	// Reasons shown in the presence log lines.
+	reasonEvent    = "event"
+	reasonInterval = "interval"
+	reasonActivity = "activity"
+	reasonIdle     = "idle"
+	reasonStop     = "stop"
 )
 
 // presenceClient is the part of *whatsmeow.Client the presence keeper uses.
@@ -42,21 +52,31 @@ type presenceClient interface {
 	IsLoggedIn() bool
 }
 
-// presenceKeeper sends presence updates after every successful login, and
-// optionally on an interval, according to the PresenceMode setting.
+// presenceKeeper sends presence updates according to the PresenceMode
+// setting: after every successful login, on push name changes, optionally on
+// an interval, and in active mode after every message the bridge sends.
 //
-// whatsmeow event handlers run inline, so handleEvent only signals the run
-// loop, which does the sending and waiting.
+// whatsmeow event handlers and the bridge's Send run on other goroutines, so
+// they only signal the run loop, which does the sending. The loop alone owns
+// the online state: blip and active modes go online until a deadline, and the
+// timer for that deadline sends "unavailable".
 type presenceKeeper struct {
 	client   presenceClient
 	log      *logrus.Entry
 	mode     string
 	blip     time.Duration
 	interval time.Duration
+	active   time.Duration
 
-	trigger chan struct{}
-	cancel  context.CancelFunc
-	done    chan struct{}
+	trigger  chan struct{}
+	activity chan struct{}
+	cancel   context.CancelFunc
+	done     chan struct{}
+
+	// Owned by the run loop.
+	online bool
+	until  time.Time
+	timer  *time.Timer
 }
 
 // newPresenceKeeper returns nil when presence updates are disabled.
@@ -66,7 +86,7 @@ func newPresenceKeeper(client presenceClient, log *logrus.Entry, mode string, bl
 	switch mode {
 	case "", presenceModeOff:
 		return nil
-	case presenceModeUnavailable, presenceModeBlip, presenceModeAvailable:
+	case presenceModeUnavailable, presenceModeBlip, presenceModeAvailable, presenceModeActive:
 	default:
 		log.Warnf("Unknown %s %q, presence updates disabled", cfgPresenceMode, mode)
 
@@ -81,24 +101,46 @@ func newPresenceKeeper(client presenceClient, log *logrus.Entry, mode string, bl
 		interval = 0
 	}
 
+	// An idle connection in active mode is left to age out.
+	if mode == presenceModeActive && interval > 0 {
+		log.Infof("%s is ignored in active mode", cfgPresenceIntervalHours)
+
+		interval = 0
+	}
+
 	return &presenceKeeper{
 		client:   client,
 		log:      log,
 		mode:     mode,
 		blip:     blip,
 		interval: interval,
+		active:   defaultPresenceActive,
 		trigger:  make(chan struct{}, 1),
+		activity: make(chan struct{}, 1),
 	}
 }
 
+// setActive sets how long active mode stays online after the last send. A
+// value of 0 or less keeps the default.
+func (p *presenceKeeper) setActive(active time.Duration) {
+	if p == nil || active <= 0 {
+		return
+	}
+
+	p.active = active
+}
+
 func (b *Bwhatsapp) newPresenceKeeper(client presenceClient) *presenceKeeper {
-	return newPresenceKeeper(
+	p := newPresenceKeeper(
 		client,
 		b.Log,
 		b.GetString(cfgPresenceMode),
 		time.Duration(b.GetInt(cfgPresenceBlipSeconds))*time.Second,
 		time.Duration(b.GetInt(cfgPresenceIntervalHours))*time.Hour,
 	)
+	p.setActive(time.Duration(b.GetInt(cfgPresenceActiveMinutes)) * time.Minute)
+
+	return p
 }
 
 func (p *presenceKeeper) start() {
@@ -110,7 +152,7 @@ func (p *presenceKeeper) start() {
 	p.cancel = cancel
 	p.done = make(chan struct{})
 
-	p.log.Infof("Presence mode %q (blip %s, interval %s)", p.mode, p.blip, p.interval)
+	p.log.Infof("Presence mode %q (blip %s, interval %s, active %s)", p.mode, p.blip, p.interval, p.active)
 
 	if p.mode == presenceModeAvailable {
 		p.warnAvailable()
@@ -132,8 +174,8 @@ func (p *presenceKeeper) warnAvailable() {
 	p.log.Warn(msg)
 }
 
-// stop ends the run loop and waits briefly for it, so that an interrupted
-// blip can still send "unavailable" before the socket is closed.
+// stop ends the run loop and waits briefly for it, so that a bridge that is
+// online can still send "unavailable" before the socket is closed.
 func (p *presenceKeeper) stop() {
 	if p == nil || p.cancel == nil {
 		return
@@ -173,8 +215,22 @@ func (p *presenceKeeper) signal() {
 	}
 }
 
+// markActive records that the bridge sent a message to WhatsApp. Only active
+// mode reacts to it.
+func (p *presenceKeeper) markActive() {
+	if p == nil || p.mode != presenceModeActive {
+		return
+	}
+
+	select {
+	case p.activity <- struct{}{}:
+	default:
+	}
+}
+
 func (p *presenceKeeper) run(ctx context.Context) {
 	defer close(p.done)
+	defer p.clear()
 
 	var tick <-chan time.Time
 
@@ -186,66 +242,190 @@ func (p *presenceKeeper) run(ctx context.Context) {
 	}
 
 	for {
-		var reason string
+		var handle func(context.Context)
 
 		select {
 		case <-ctx.Done():
-			return
 		case <-p.trigger:
-			reason = "event"
+			handle = p.onTrigger
 		case <-tick:
-			reason = "interval"
+			handle = p.onTick
+		case <-p.activity:
+			handle = p.onActivity
+		case <-p.timerC():
+			handle = p.onTimer
 		}
 
-		// select picks at random among ready cases, so a trigger or tick can
-		// win over a stop that is already pending.
+		// select picks at random among ready cases, so another input can win
+		// over a stop that is already pending.
 		if ctx.Err() != nil {
+			p.onStop(ctx)
+
 			return
 		}
 
-		p.update(ctx, reason)
+		handle(ctx)
 	}
 }
 
-func (p *presenceKeeper) update(ctx context.Context, reason string) {
-	// A dropped socket leaves IsLoggedIn true until whatsmeow sees a stream
-	// error, so both are checked.
-	if !p.client.IsConnected() || !p.client.IsLoggedIn() {
-		p.log.Debugf("Skipping presence update (%s): not connected or not logged in", reason)
+func (p *presenceKeeper) onTrigger(ctx context.Context) {
+	p.refresh(ctx, reasonEvent)
+}
 
+func (p *presenceKeeper) onTick(ctx context.Context) {
+	p.refresh(ctx, reasonInterval)
+}
+
+// refresh handles a login, a push name change or an interval tick. A bridge
+// that is already online sends "available" again, since a reconnect may have
+// reset it on the server, and keeps its deadline.
+func (p *presenceKeeper) refresh(ctx context.Context, reason string) {
+	if !p.connected(reason) {
 		return
 	}
 
 	switch p.mode {
 	case presenceModeUnavailable:
 		p.sendUnavailable(ctx, reason)
-
-		return
 	case presenceModeAvailable:
-		// Stays available: no "unavailable" follows, even after a failure,
-		// and none is sent when the keeper stops.
 		_ = p.send(ctx, types.PresenceAvailable, reason)
-
-		return
-	}
-
-	// whatsmeow switches delivery receipts to "active" as soon as it is asked
-	// for "available", before anything is written, and a cancelled send may
-	// still reach the server. So "unavailable" follows any attempt, except
-	// ErrNoPushName, which whatsmeow returns before changing anything.
-	err := p.send(ctx, types.PresenceAvailable, reason)
-	if errors.Is(err, whatsmeow.ErrNoPushName) {
-		return
-	}
-
-	if err == nil {
-		select {
-		case <-time.After(p.blip):
-		case <-ctx.Done():
+	case presenceModeBlip:
+		if p.online {
+			p.resend(ctx, reason)
+		} else {
+			p.goOnline(ctx, p.blip, reason)
+		}
+	case presenceModeActive:
+		if p.online {
+			p.resend(ctx, reason)
+		} else {
+			p.sendUnavailable(ctx, reason)
 		}
 	}
+}
 
+// onActivity extends an online bridge, even while disconnected, and takes an
+// offline one online.
+func (p *presenceKeeper) onActivity(ctx context.Context) {
+	if p.mode != presenceModeActive {
+		return
+	}
+
+	if p.online {
+		p.extend(p.active)
+
+		return
+	}
+
+	if p.connected(reasonActivity) {
+		p.goOnline(ctx, p.active, reasonActivity)
+	}
+}
+
+func (p *presenceKeeper) onTimer(ctx context.Context) {
+	// A send that arrived together with the deadline keeps the bridge online.
+	select {
+	case <-p.activity:
+		p.extend(p.active)
+
+		return
+	default:
+	}
+
+	p.goOffline(ctx, reasonIdle)
+}
+
+func (p *presenceKeeper) onStop(ctx context.Context) {
+	if p.online {
+		p.goOffline(ctx, reasonStop)
+	}
+}
+
+// A dropped socket leaves IsLoggedIn true until whatsmeow sees a stream
+// error, so both are checked.
+func (p *presenceKeeper) connected(reason string) bool {
+	if p.client.IsConnected() && p.client.IsLoggedIn() {
+		return true
+	}
+
+	p.log.Debugf("Skipping presence update (%s): not connected or not logged in", reason)
+
+	return false
+}
+
+// goOnline sends "available" and stays online for d.
+//
+// whatsmeow switches delivery receipts to "active" as soon as it is asked for
+// "available", before anything is written, and a cancelled send may still
+// reach the server. So "unavailable" follows any failed attempt, except
+// ErrNoPushName, which whatsmeow returns before changing anything.
+func (p *presenceKeeper) goOnline(ctx context.Context, d time.Duration, reason string) {
+	err := p.send(ctx, types.PresenceAvailable, reason)
+
+	switch {
+	case err == nil:
+		p.online = true
+		p.until = time.Now().Add(d)
+		p.armTimer()
+	case !errors.Is(err, whatsmeow.ErrNoPushName):
+		p.sendUnavailable(ctx, reason)
+	}
+}
+
+// resend sends "available" again while online. On failure it goes offline,
+// for the reason given at goOnline.
+func (p *presenceKeeper) resend(ctx context.Context, reason string) {
+	err := p.send(ctx, types.PresenceAvailable, reason)
+	if err == nil || errors.Is(err, whatsmeow.ErrNoPushName) {
+		return
+	}
+
+	p.clear()
 	p.sendUnavailable(ctx, reason)
+}
+
+// extend moves the deadline to d from now.
+func (p *presenceKeeper) extend(d time.Duration) {
+	p.until = time.Now().Add(d)
+	p.armTimer()
+}
+
+func (p *presenceKeeper) goOffline(ctx context.Context, reason string) {
+	p.clear()
+
+	if p.connected(reason) {
+		p.sendUnavailable(ctx, reason)
+	}
+}
+
+func (p *presenceKeeper) armTimer() {
+	wait := time.Until(p.until)
+
+	if p.timer == nil {
+		p.timer = time.NewTimer(wait)
+
+		return
+	}
+
+	p.timer.Reset(wait)
+}
+
+func (p *presenceKeeper) clear() {
+	p.online = false
+	p.until = time.Time{}
+
+	if p.timer != nil {
+		p.timer.Stop()
+		p.timer = nil
+	}
+}
+
+func (p *presenceKeeper) timerC() <-chan time.Time {
+	if p.timer == nil {
+		return nil
+	}
+
+	return p.timer.C
 }
 
 // sendUnavailable ignores cancellation of the run loop's context, so that
