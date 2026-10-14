@@ -36,6 +36,7 @@ type Bwhatsapp struct {
 	users        map[string]types.ContactInfo
 	userAvatars  map[string]string
 	joinedGroups []*types.GroupInfo
+	presence     *presenceKeeper
 }
 
 type Replyable struct {
@@ -75,8 +76,19 @@ func (b *Bwhatsapp) Connect() error {
 
 	b.Log.Debugln("Connecting to WhatsApp..")
 
+	// Stop the keeper of a previous successful Connect, if Disconnect was
+	// not called in between.
+	b.presence.stop()
+
 	b.wc = whatsmeow.NewClient(device, waLog.Stdout("Client", "INFO", true))
 	b.wc.AddEventHandler(b.eventHandler)
+
+	// The handler is registered now so that no Connected event is missed;
+	// the keeper buffers the trigger and only starts once Connect succeeds.
+	b.presence = b.newPresenceKeeper(b.wc)
+	if b.presence != nil {
+		b.wc.AddEventHandler(b.presence.handleEvent)
+	}
 
 	firstlogin := false
 	var qrChan <-chan whatsmeow.QRChannelItem
@@ -155,12 +167,15 @@ func (b *Bwhatsapp) Connect() error {
 
 	b.Log.Info("Finished getting avatars..")
 
+	b.presence.start()
+
 	return nil
 }
 
 // Disconnect is called while reconnecting to the bridge
 // Required implementation of the Bridger interface
 func (b *Bwhatsapp) Disconnect() error {
+	b.presence.stop()
 	b.wc.Disconnect()
 
 	return nil
@@ -246,6 +261,7 @@ func (b *Bwhatsapp) PostDocumentMessage(msg config.Message, filetype string) (st
 
 	ID := whatsmeow.GenerateMessageID()
 	_, err = b.wc.SendMessage(context.TODO(), groupJID, &message, whatsmeow.SendRequestExtra{ID: ID})
+	b.noteSent(err)
 
 	return ID, err
 }
@@ -357,6 +373,7 @@ func (b *Bwhatsapp) PostAudioMessage(msg config.Message, filetype string) (strin
 
 	captionID := whatsmeow.GenerateMessageID()
 	_, err = b.wc.SendMessage(context.TODO(), groupJID, &captionMessage, whatsmeow.SendRequestExtra{ID: captionID})
+	b.noteSent(err)
 
 	return ID, err
 }
@@ -379,6 +396,7 @@ func (b *Bwhatsapp) Send(msg config.Message) (string, error) {
 		}
 
 		_, err := b.wc.RevokeMessage(context.Background(), groupJID, msg.ID)
+		b.noteSent(err)
 
 		return "", err
 	}
@@ -446,6 +464,14 @@ func (b *Bwhatsapp) sendMessage(rmsg config.Message, message *proto.Message) (st
 	ID := whatsmeow.GenerateMessageID()
 
 	_, err := b.wc.SendMessage(context.Background(), groupJID, message, whatsmeow.SendRequestExtra{ID: ID})
+	b.noteSent(err)
 
 	return getMessageIdFormat(*b.wc.Store.ID, ID), err
+}
+
+// noteSent tells the presence keeper about a message sent to WhatsApp.
+func (b *Bwhatsapp) noteSent(err error) {
+	if err == nil {
+		b.presence.markActive()
+	}
 }
