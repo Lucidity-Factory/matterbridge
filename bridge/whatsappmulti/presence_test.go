@@ -561,12 +561,11 @@ func TestPresenceKeeperAvailableStartWarns(t *testing.T) {
 	cases := []struct {
 		mode        string
 		interval    time.Duration
-		pushWarns   int
 		intervalTip int
 	}{
-		{mode: "available", interval: 0, pushWarns: 1, intervalTip: 1},
-		{mode: "available", interval: time.Hour, pushWarns: 1, intervalTip: 0},
-		{mode: "blip", interval: 0, pushWarns: 0, intervalTip: 0},
+		{mode: "available", interval: 0, intervalTip: 1},
+		{mode: "available", interval: time.Hour, intervalTip: 0},
+		{mode: "blip", interval: 0, intervalTip: 0},
 	}
 
 	for _, tc := range cases {
@@ -576,10 +575,10 @@ func TestPresenceKeeperAvailableStartWarns(t *testing.T) {
 		p.start()
 		p.stop()
 
-		assert.Equal(t, tc.pushWarns, countEntries(hook, logrus.WarnLevel, "push notifications"),
-			"mode %s, interval %s", tc.mode, tc.interval)
 		assert.Equal(t, tc.intervalTip, countEntries(hook, logrus.WarnLevel, "set PresenceIntervalHours"),
 			"mode %s, interval %s", tc.mode, tc.interval)
+		assert.Equal(t, tc.intervalTip, countEntries(hook, logrus.WarnLevel, ""),
+			"no other warning: mode %s, interval %s", tc.mode, tc.interval)
 	}
 }
 

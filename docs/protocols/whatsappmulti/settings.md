@@ -54,8 +54,9 @@ sent then.
 
 While the bridge is marked as available, delivery receipts for incoming
 messages are sent as "active" rather than "inactive" (the bridge sends no
-read receipts), and the primary phone has been reported not to receive push
-notifications (whatsmeow issues #262 and #605).
+read receipts). Being available does not silence the primary phone: group
+and direct messages still notify it. whatsmeow issue #262 reports the
+opposite.
 
 In `blip` mode, keep the blip short. In `blip` and `active` modes, if
 sending "available" fails for any reason other than a missing push name,
@@ -78,9 +79,6 @@ In `active` mode:
 
 `available` mode has these costs for as long as the bridge runs:
 
-- The primary phone may get no push notifications for new messages. This is
-  reported, not confirmed: in the issues above, one user found that
-  "unavailable" restored notifications and another saw no difference.
 - Contacts see the account as online while the bridge is connected, subject
   to the account's privacy settings.
 - Delivery receipts are sent as "active" once the first update has been sent.

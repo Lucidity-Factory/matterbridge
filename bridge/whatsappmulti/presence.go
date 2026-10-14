@@ -161,17 +161,15 @@ func (p *presenceKeeper) start() {
 	go p.run(ctx)
 }
 
-// warnAvailable logs the costs of staying available. Without an interval, a
-// send that fails while the socket stays up is not retried until the next
-// login or push name change.
+// warnAvailable warns when available mode has no interval: a send that fails
+// while the socket stays up is then not retried until the next login or push
+// name change.
 func (p *presenceKeeper) warnAvailable() {
-	msg := "PresenceMode available keeps the bridge online while connected; " +
-		"the primary phone may not get push notifications"
-	if p.interval == 0 {
-		msg += "; set " + cfgPresenceIntervalHours + " so a failed send is retried while connected"
+	if p.interval != 0 {
+		return
 	}
 
-	p.log.Warn(msg)
+	p.log.Warnf("PresenceMode available: set %s so a failed send is retried while connected", cfgPresenceIntervalHours)
 }
 
 // stop ends the run loop and waits briefly for it, so that a bridge that is

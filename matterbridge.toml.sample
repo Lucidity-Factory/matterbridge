@@ -1530,8 +1530,6 @@ Label="Organization"
 # ("available" for PresenceBlipSeconds, then "unavailable"), "available" (always online)
 # or "active" (online after each message the bridge sends, offline after
 # PresenceActiveMinutes without one).
-# The primary phone has been reported to get no push notifications while the bridge is
-# available, so "available" may silence it for as long as the bridge runs.
 # optional (default "off")
 PresenceMode="off"
 
