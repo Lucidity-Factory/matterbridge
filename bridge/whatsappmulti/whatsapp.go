@@ -415,7 +415,7 @@ func (b *Bwhatsapp) Send(msg config.Message) (string, error) {
 	}
 
 	// Handle Upload a file
-	if msg.Extra["file"] != nil {
+	if len(msg.Extra["file"]) > 0 {
 		fi := msg.Extra["file"][0].(config.FileInfo)
 		filetype := mime.TypeByExtension(filepath.Ext(fi.Name))
 
