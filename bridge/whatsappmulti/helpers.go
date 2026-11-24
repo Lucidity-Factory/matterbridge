@@ -118,7 +118,7 @@ func (b *Bwhatsapp) GetProfilePicThumb(jid string) (*types.ProfilePictureInfo, e
 		Preview: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get avatar: %v", err)
+		return nil, fmt.Errorf("failed to get avatar: %w", err)
 	}
 
 	return info, nil
