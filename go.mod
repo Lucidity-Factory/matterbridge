@@ -36,17 +36,17 @@ require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/slack-go/slack v0.17.3
 	github.com/spf13/viper v1.19.0
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	github.com/vincent-petithory/dataurl v1.0.0
 	github.com/writeas/go-strip-markdown v2.0.1+incompatible
 	github.com/xmppo/go-xmpp v0.3.2
 	github.com/yaegashi/msgraph.go v0.1.4
 	github.com/yuin/goldmark v1.8.5
 	github.com/zfjagann/golang-ring v0.0.0-20220330170733-19bcea1b6289
-	go.mau.fi/whatsmeow v0.0.0-20260722203353-e9a033b24933
+	go.mau.fi/whatsmeow v0.0.0-20261116172437-19d61352436f
 	golang.org/x/image v0.19.0
 	golang.org/x/oauth2 v0.22.0
-	golang.org/x/text v0.41.0
+	golang.org/x/text v0.44.0
 	gomod.garykim.dev/nc-talk v0.3.0
 	layeh.com/gumble v0.0.0-20221205141517-d1df60a3cc14
 	maunium.net/go/mautrix v0.29.1-0.20260722181210-2ee6142f1dd5
@@ -90,7 +90,7 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
-	github.com/mattn/go-sqlite3 v1.14.48 // indirect
+	github.com/mattn/go-sqlite3 v1.14.53 // indirect
 	github.com/mazznoer/csscolorparser v0.1.8 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
@@ -101,10 +101,9 @@ require (
 	github.com/pborman/uuid v1.2.1 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
-	github.com/petermattis/goid v0.0.0-20260713124913-97594f28f5ca // indirect
+	github.com/petermattis/goid v0.0.0-20261109124353-7cfa343ad0ab // indirect
 	github.com/philhofer/fwd v1.1.3-0.20240612014219-fbbf4953d986 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rickb777/date v1.12.4 // indirect
 	github.com/rickb777/plural v1.2.0 // indirect
@@ -132,15 +131,15 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/wiggin77/merror v1.0.5 // indirect
 	github.com/wiggin77/srslog v1.0.1 // indirect
-	go.mau.fi/libsignal v0.2.2 // indirect
-	go.mau.fi/util v0.9.12-0.20260719092501-f9c03d846391 // indirect
+	go.mau.fi/libsignal v0.2.3 // indirect
+	go.mau.fi/util v0.11.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/exp v0.0.0-20260709172345-9ea1abe57597 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/term v0.45.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/exp v0.0.0-20261113113407-e3970619a1a4 // indirect
+	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240722135656-d784300faade // indirect
 	google.golang.org/grpc v1.65.0 // indirect
