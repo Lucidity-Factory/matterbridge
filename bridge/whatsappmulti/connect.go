@@ -9,6 +9,7 @@ import (
 	"github.com/mdp/qrterminal"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
@@ -21,12 +22,17 @@ const (
 	// loginTimeout bounds the wait for whatsmeow's Connected event. On first
 	// pairing it follows the 515 reconnect and the prekey upload.
 	loginTimeout = 60 * time.Second
+
+	// recoveryRetryInterval is the wait between reconnect attempts after a
+	// running bridge got a 405 (client outdated).
+	recoveryRetryInterval = 10 * time.Minute
 )
 
 var (
-	errQRFailed     = errors.New("WhatsApp QR pairing failed")
-	errLoginFailed  = errors.New("WhatsApp login failed")
-	errLoginTimeout = errors.New("timed out waiting for WhatsApp login")
+	errQRFailed       = errors.New("WhatsApp QR pairing failed")
+	errLoginFailed    = errors.New("WhatsApp login failed")
+	errLoginTimeout   = errors.New("timed out waiting for WhatsApp login")
+	errClientOutdated = errors.New("client outdated, whatsmeow needs updating")
 )
 
 // waitForQR shows each QR code and waits for the channel to close. The
@@ -95,23 +101,28 @@ func loginResult(evt any) (bool, error) {
 	case *events.TemporaryBan:
 		return true, fmt.Errorf("%w: %s", errLoginFailed, e.String())
 	case *events.ClientOutdated:
-		return true, fmt.Errorf("%w: client outdated, whatsmeow needs updating", errLoginFailed)
+		return true, fmt.Errorf("%w: %w (version %s)", errLoginFailed, errClientOutdated, store.GetWAVersion())
 	}
 
 	return false, nil
 }
 
-// signalLogin passes a login result to a waiting Connect. It must never
-// block: it runs inside whatsmeow's event dispatch, which holds a lock that
-// adding or removing handlers needs.
-func (b *Bwhatsapp) signalLogin(err error) {
-	ch := b.loginCh.Load()
-	if ch == nil {
-		return
-	}
+// armLogin starts a wait for a login result: eventHandler sends it to the
+// returned channel until disarm runs. disarm only clears this wait, not one
+// armed after it.
+func (b *Bwhatsapp) armLogin() (<-chan error, func()) {
+	ch := make(chan error, 1)
+	b.loginCh.Store(&ch)
 
+	return ch, func() { b.loginCh.CompareAndSwap(&ch, nil) }
+}
+
+// signalLogin passes a login result to a waiting Connect or recovery round.
+// It must never block: it runs inside whatsmeow's event dispatch, which holds
+// a lock that adding or removing handlers needs.
+func signalLogin(ch chan<- error, err error) {
 	select {
-	case *ch <- err:
+	case ch <- err:
 	default:
 	}
 }
