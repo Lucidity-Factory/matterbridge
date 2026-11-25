@@ -24,17 +24,18 @@ func TestLoginResult(t *testing.T) {
 		evt     any
 		done    bool
 		wantErr string // empty: no error expected
+		wraps   error  // nil: only errLoginFailed is checked
 	}{
-		{"Connected", &events.Connected{}, true, ""},
-		{"LoggedOut", &events.LoggedOut{OnConnect: true, Reason: events.ConnectFailureLoggedOut}, true, "logged out from another device"},
-		{"StreamReplaced", &events.StreamReplaced{}, true, "stream replaced"},
-		{"ConnectFailure", &events.ConnectFailure{Reason: events.ConnectFailureServiceUnavailable, Message: "busy"}, true, "busy"},
-		{"TemporaryBan", &events.TemporaryBan{Code: events.TempBanSentToTooManyPeople}, true, "temporarily banned"},
-		{"ClientOutdated", &events.ClientOutdated{}, true, "client outdated"},
+		{"Connected", &events.Connected{}, true, "", nil},
+		{"LoggedOut", &events.LoggedOut{OnConnect: true, Reason: events.ConnectFailureLoggedOut}, true, "logged out from another device", nil},
+		{"StreamReplaced", &events.StreamReplaced{}, true, "stream replaced", nil},
+		{"ConnectFailure", &events.ConnectFailure{Reason: events.ConnectFailureBadUserAgent, Message: "bad agent"}, true, "bad agent", errConnectFailure},
+		{"TemporaryBan", &events.TemporaryBan{Code: events.TempBanSentToTooManyPeople}, true, "temporarily banned", nil},
+		{"ClientOutdated", &events.ClientOutdated{}, true, "client outdated", errClientOutdated},
 		// Not terminal: these happen during a normal first pairing or later.
-		{"Disconnected", &events.Disconnected{}, false, ""},
-		{"KeepAliveTimeout", &events.KeepAliveTimeout{}, false, ""},
-		{"PairSuccess", &events.PairSuccess{}, false, ""},
+		{"Disconnected", &events.Disconnected{}, false, "", nil},
+		{"KeepAliveTimeout", &events.KeepAliveTimeout{}, false, "", nil},
+		{"PairSuccess", &events.PairSuccess{}, false, "", nil},
 	}
 
 	for _, tc := range cases {
@@ -52,6 +53,10 @@ func TestLoginResult(t *testing.T) {
 			require.Error(t, err)
 			assert.ErrorIs(t, err, errLoginFailed)
 			assert.Contains(t, err.Error(), tc.wantErr)
+
+			if tc.wraps != nil {
+				assert.ErrorIs(t, err, tc.wraps)
+			}
 		})
 	}
 }
@@ -188,20 +193,18 @@ func TestWaitForLogin(t *testing.T) {
 }
 
 func TestSignalLoginNeverBlocks(t *testing.T) {
-	b := &Bwhatsapp{}
+	ch := make(chan error, 1)
 
 	done := make(chan struct{})
 
 	go func() {
-		// No Connect waiting: a nil channel pointer is a no-op.
-		b.signalLogin(nil)
+		// No wait armed: a nil channel is a no-op.
+		signalLogin(nil, nil)
 
 		// A waiting Connect that already has a result: the second signal
 		// is dropped, not blocked on.
-		ch := make(chan error, 1)
-		b.loginCh.Store(&ch)
-		b.signalLogin(nil)
-		b.signalLogin(errTestSecond)
+		signalLogin(ch, nil)
+		signalLogin(ch, errTestSecond)
 
 		close(done)
 	}()
@@ -212,7 +215,6 @@ func TestSignalLoginNeverBlocks(t *testing.T) {
 		t.Fatal("signalLogin blocked")
 	}
 
-	ch := *b.loginCh.Load()
 	require.Len(t, ch, 1)
 	assert.NoError(t, <-ch, "the first result is kept")
 }

@@ -39,8 +39,23 @@ type Bwhatsapp struct {
 	joinedGroups []*types.GroupInfo
 	presence     *presenceKeeper
 
-	// loginCh receives the login result of the current Connect.
+	// loginCh receives the login result while Connect or a recovery round
+	// waits for one (see armLogin); nil otherwise.
 	loginCh atomic.Pointer[chan error]
+
+	// recovering is true while a reconnect after a runtime 405 runs.
+	// shortcut: a running recovery is not cancelled by Disconnect; only
+	// gateway.reconnectBridge calls Disconnect, and nothing triggers it for
+	// WhatsApp. Add cancellation if that changes.
+	recovering atomic.Bool
+	// recoveryRetry overrides recoveryRetryInterval; tests only.
+	recoveryRetry time.Duration
+	// recoveryLoginWait overrides loginTimeout during recovery; tests only.
+	recoveryLoginWait time.Duration
+	// sleepFn replaces time.Sleep between recovery rounds; tests only.
+	sleepFn func(time.Duration)
+	// testRecoveryClient replaces b.wc as the recovery target; tests only.
+	testRecoveryClient recoveryClient
 }
 
 type Replyable struct {
@@ -78,6 +93,8 @@ func (b *Bwhatsapp) Connect() error {
 		return errors.New("whatsapp's telephone number need to be configured")
 	}
 
+	b.useLatestWAVersion()
+
 	b.Log.Debugln("Connecting to WhatsApp..")
 
 	// Stop the keeper of a previous successful Connect, if Disconnect was
@@ -106,8 +123,8 @@ func (b *Bwhatsapp) Connect() error {
 	// pairing with a 515 stream error, after which whatsmeow reconnects and
 	// logs in by itself; disconnecting before that makes WhatsApp drop the
 	// new device. So nothing is fetched until Connected arrives.
-	loginCh := make(chan error, 1)
-	b.loginCh.Store(&loginCh)
+	loginCh, disarm := b.armLogin()
+	defer disarm()
 
 	err = b.wc.Connect()
 	if err != nil {
@@ -129,6 +146,10 @@ func (b *Bwhatsapp) Connect() error {
 	if err != nil {
 		return b.failConnect(err)
 	}
+
+	// Logged in: a 405 or connect failure while contacts, groups and avatars
+	// load must start a recovery, not go to this finished wait.
+	disarm()
 
 	b.contacts, err = b.wc.Store.Contacts.GetAllContacts(context.Background())
 	if err != nil {

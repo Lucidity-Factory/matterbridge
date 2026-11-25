@@ -18,8 +18,12 @@ import (
 
 // nolint:gocritic
 func (b *Bwhatsapp) eventHandler(evt any) {
-	if done, err := loginResult(evt); done {
-		b.signalLogin(err)
+	// Loaded once: a failed Connect can clear it while this handler runs, and
+	// its 405 must not then also start a recovery.
+	ch := b.loginCh.Load()
+
+	if done, err := loginResult(evt); done && ch != nil {
+		signalLogin(*ch, err)
 	}
 
 	switch e := evt.(type) {
@@ -39,6 +43,17 @@ func (b *Bwhatsapp) eventHandler(evt any) {
 		b.Log.Warnf("WhatsApp keepalive timeout (errors: %d, last success: %s)", e.ErrorCount, e.LastSuccess.Format(time.RFC3339))
 	case *events.KeepAliveRestored:
 		b.Log.Info("WhatsApp keepalive restored")
+	case *events.ClientOutdated:
+		// While a login wait is armed, the 405 is that wait's result.
+		if ch == nil {
+			b.startRecovery(b.recoveryTarget(), "client outdated")
+		}
+	case *events.ConnectFailure:
+		// Sent only for failures whatsmeow does not retry itself
+		// (connectionevents.go at 19d61352436f).
+		if ch == nil {
+			b.startRecovery(b.recoveryTarget(), "connect failure")
+		}
 	}
 }
 
