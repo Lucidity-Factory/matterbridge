@@ -18,7 +18,24 @@ import (
 const (
 	callConnect    = "Connect"
 	callDisconnect = "Disconnect"
+	causeOutdated  = "client outdated"
+	causeFailure   = "connect failure"
 )
+
+// unknownConnectFailure is a ConnectFailure as whatsmeow dispatches it: only
+// for reasons it does not retry itself (connectionevents.go at 19d61352436f).
+func unknownConnectFailure() recoveryStep {
+	return recoveryStep{evt: &events.ConnectFailure{Reason: events.ConnectFailureReason(499), Message: "unknown"}}
+}
+
+func repeatStep(step recoveryStep, n int) []recoveryStep {
+	steps := make([]recoveryStep, n)
+	for i := range steps {
+		steps[i] = step
+	}
+
+	return steps
+}
 
 // recoveryStep scripts one Connect: err is returned by Connect; otherwise evt
 // (if any) is delivered through eventHandler, as whatsmeow dispatches it after
@@ -139,7 +156,7 @@ func TestRecoveryRetriesOutdatedThenReconnects(t *testing.T) {
 		recoveryStep{evt: &events.Connected{}},
 	)
 
-	b.runRecovery(fake)
+	b.runRecovery(fake, causeOutdated)
 
 	// Each round disconnects first; the failed round also disconnects after
 	// its login wait.
@@ -158,7 +175,7 @@ func TestRecoveryRetriesConnectError(t *testing.T) {
 		recoveryStep{evt: &events.Connected{}},
 	)
 
-	b.runRecovery(fake)
+	b.runRecovery(fake, causeOutdated)
 
 	// A failed Connect is followed by a Disconnect before the next round's.
 	assert.Equal(t, []string{callDisconnect, callConnect, callDisconnect, callDisconnect, callConnect}, fake.callLog())
@@ -172,7 +189,7 @@ func TestRecoveryRetriesLoginTimeout(t *testing.T) {
 		recoveryStep{evt: &events.Connected{}},
 	)
 
-	b.runRecovery(fake)
+	b.runRecovery(fake, causeOutdated)
 
 	assert.Equal(t, 2, fake.connects())
 	assert.Equal(t, 1, countEntries(hook, logrus.ErrorLevel, "timed out waiting for WhatsApp login"))
@@ -187,7 +204,6 @@ func TestRecoveryStopsOnTerminalEvents(t *testing.T) {
 		{"LoggedOut", &events.LoggedOut{Reason: events.ConnectFailureLoggedOut}},
 		{"StreamReplaced", &events.StreamReplaced{}},
 		{"TemporaryBan", &events.TemporaryBan{Code: events.TempBanSentToTooManyPeople}},
-		{"ConnectFailure", &events.ConnectFailure{Reason: events.ConnectFailureReason(499), Message: "unknown"}},
 	}
 
 	for _, tc := range cases {
@@ -197,7 +213,7 @@ func TestRecoveryStopsOnTerminalEvents(t *testing.T) {
 				recoveryStep{evt: &events.Connected{}},
 			)
 
-			b.runRecovery(fake)
+			b.runRecovery(fake, causeOutdated)
 
 			assert.Equal(t, 1, fake.connects())
 			assert.Equal(t, 1, countEntries(hook, logrus.ErrorLevel, "stopped"))
@@ -206,15 +222,67 @@ func TestRecoveryStopsOnTerminalEvents(t *testing.T) {
 	}
 }
 
+func TestRecoveryRetriesConnectFailure(t *testing.T) {
+	b, fake, hook, sleeps := newRecoveryBridge(t, time.Second,
+		unknownConnectFailure(),
+		recoveryStep{evt: &events.Connected{}},
+	)
+
+	b.runRecovery(fake, causeFailure)
+
+	assert.Equal(t, 2, fake.connects())
+	assert.Equal(t, 1, countEntries(hook, logrus.ErrorLevel, "reconnect after connect failure failed"))
+	assert.Equal(t, 1, countEntries(hook, logrus.InfoLevel, "reconnected after connect failure"))
+	assert.Len(t, *sleeps, 1)
+}
+
+func TestRecoveryGivesUpAfterSixConnectFailures(t *testing.T) {
+	b, fake, hook, sleeps := newRecoveryBridge(t, time.Second, repeatStep(unknownConnectFailure(), 7)...)
+
+	b.runRecovery(fake, causeFailure)
+
+	assert.Equal(t, 6, fake.connects())
+	assert.Len(t, *sleeps, 5)
+	assert.Equal(t, 1, countEntries(hook, logrus.ErrorLevel, "gave up after 6 connect failures"))
+	assert.Equal(t, 0, countEntries(hook, logrus.InfoLevel, "reconnected"))
+}
+
+func TestRecoveryCapCountsOnlyConnectFailures(t *testing.T) {
+	steps := repeatStep(unknownConnectFailure(), 5)
+	steps = append(steps, recoveryStep{evt: &events.ClientOutdated{}}, recoveryStep{})
+	steps = append(steps, repeatStep(unknownConnectFailure(), 2)...)
+
+	b, fake, hook, _ := newRecoveryBridge(t, 20*time.Millisecond, steps...)
+
+	b.runRecovery(fake, causeFailure)
+
+	// The 405 and the login timeout neither advance nor reset the count.
+	assert.Equal(t, 8, fake.connects())
+	assert.Equal(t, 1, countEntries(hook, logrus.ErrorLevel, "gave up after 6 connect failures"))
+}
+
+func TestRecoveryDoesNotCapClientOutdated(t *testing.T) {
+	steps := repeatStep(recoveryStep{evt: &events.ClientOutdated{}}, 7)
+	steps = append(steps, recoveryStep{evt: &events.Connected{}})
+
+	b, fake, hook, sleeps := newRecoveryBridge(t, time.Second, steps...)
+
+	b.runRecovery(fake, causeOutdated)
+
+	assert.Equal(t, 8, fake.connects())
+	assert.Len(t, *sleeps, 7)
+	assert.Equal(t, 1, countEntries(hook, logrus.InfoLevel, "reconnected after client outdated"))
+}
+
 func TestStartRecoveryRunsOneLoop(t *testing.T) {
 	b, fake, _, _ := newRecoveryBridge(t, time.Second, recoveryStep{evt: &events.Connected{}})
 	fake.entered = make(chan struct{}, 2)
 	fake.release = make(chan struct{})
 
-	b.startRecovery(fake)
+	b.startRecovery(fake, causeOutdated)
 	<-fake.entered
 
-	b.startRecovery(fake)
+	b.startRecovery(fake, causeOutdated)
 
 	select {
 	case <-fake.entered:
@@ -240,6 +308,38 @@ func TestClientOutdatedDuringLoginWaitDoesNotRecover(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	assert.Empty(t, fake.callLog(), "the 405 belongs to the armed wait")
+}
+
+func TestConnectFailureDuringLoginWaitDoesNotRecover(t *testing.T) {
+	b, fake, _, _ := newRecoveryBridge(t, time.Second, recoveryStep{evt: &events.Connected{}})
+	b.testRecoveryClient = fake
+
+	ch, disarm := b.armLogin()
+	defer disarm()
+
+	b.eventHandler(unknownConnectFailure().evt)
+
+	require.ErrorIs(t, <-ch, errConnectFailure)
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Empty(t, fake.callLog(), "the connect failure belongs to the armed wait")
+}
+
+func TestConnectFailureWhileRunningStartsRecovery(t *testing.T) {
+	b, fake, hook, _ := newRecoveryBridge(t, time.Second, recoveryStep{evt: &events.Connected{}})
+	b.testRecoveryClient = fake
+	fake.entered = make(chan struct{}, 1)
+
+	b.eventHandler(unknownConnectFailure().evt)
+
+	select {
+	case <-fake.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no recovery started")
+	}
+
+	require.Eventually(t, func() bool { return !b.recovering.Load() }, 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, 1, countEntries(hook, logrus.InfoLevel, "reconnected after connect failure"))
 }
 
 func TestClientOutdatedWhileRunningStartsRecovery(t *testing.T) {

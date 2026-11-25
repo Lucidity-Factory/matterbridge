@@ -46,7 +46,13 @@ func (b *Bwhatsapp) eventHandler(evt any) {
 	case *events.ClientOutdated:
 		// While a login wait is armed, the 405 is that wait's result.
 		if ch == nil {
-			b.startRecovery(b.recoveryTarget())
+			b.startRecovery(b.recoveryTarget(), "client outdated")
+		}
+	case *events.ConnectFailure:
+		// Sent only for failures whatsmeow does not retry itself
+		// (connectionevents.go at 19d61352436f).
+		if ch == nil {
+			b.startRecovery(b.recoveryTarget(), "connect failure")
 		}
 	}
 }

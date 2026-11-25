@@ -24,38 +24,48 @@ func (b *Bwhatsapp) recoveryTarget() recoveryClient {
 }
 
 // startRecovery reconnects a running bridge after WhatsApp rejected its client
-// version (405). whatsmeow does not reconnect by itself after a 405, so
-// without this the bridge stays disconnected while the process keeps running.
-// At most one recovery runs at a time.
-func (b *Bwhatsapp) startRecovery(wc recoveryClient) {
+// version (405) or failed the connect. whatsmeow does not reconnect by itself
+// after either, so without this the bridge stays disconnected while the
+// process keeps running. cause names the trigger in the log. At most one
+// recovery runs at a time.
+func (b *Bwhatsapp) startRecovery(wc recoveryClient, cause string) {
 	if !b.recovering.CompareAndSwap(false, true) {
 		return
 	}
 
-	go b.runRecovery(wc)
+	go b.runRecovery(wc, cause)
 }
 
-// runRecovery repeats recovery rounds until one logs in or fails in a way a
-// retry cannot fix.
-func (b *Bwhatsapp) runRecovery(wc recoveryClient) {
+// runRecovery repeats recovery rounds until one logs in, fails in a way a
+// retry cannot fix, or ends in a connect failure maxConnectFailureRounds times.
+func (b *Bwhatsapp) runRecovery(wc recoveryClient, cause string) {
 	defer b.recovering.Store(false)
+
+	connectFailures := 0
 
 	for {
 		retry, err := b.recoveryRound(wc)
+		if errors.Is(err, errConnectFailure) {
+			connectFailures++
+		}
 
 		switch {
 		case err == nil:
-			b.Log.Info("WhatsApp reconnected after client outdated")
+			b.Log.Infof("WhatsApp reconnected after %s", cause)
 
 			return
 		case !retry:
-			b.Log.Errorf("WhatsApp reconnect after client outdated stopped: %v", err)
+			b.Log.Errorf("WhatsApp reconnect after %s stopped: %v", cause, err)
+
+			return
+		case connectFailures >= maxConnectFailureRounds:
+			b.Log.Errorf("WhatsApp reconnect after %s gave up after %d connect failures: %v", cause, connectFailures, err)
 
 			return
 		case errors.Is(err, errClientOutdated):
 			b.Log.Errorf("WhatsApp still rejects client version %s; retrying in %s. whatsmeow may need updating.", store.GetWAVersion(), b.retryInterval())
 		default:
-			b.Log.Errorf("WhatsApp reconnect after client outdated failed (%v); retrying in %s", err, b.retryInterval())
+			b.Log.Errorf("WhatsApp reconnect after %s failed (%v); retrying in %s", cause, err, b.retryInterval())
 		}
 
 		b.recoverySleep(b.retryInterval())
@@ -94,7 +104,7 @@ func (b *Bwhatsapp) recoveryRound(wc recoveryClient) (bool, error) {
 	// A login after the wait must not leave a half-open connection behind.
 	wc.Disconnect()
 
-	return errors.Is(err, errClientOutdated) || errors.Is(err, errLoginTimeout), err
+	return errors.Is(err, errClientOutdated) || errors.Is(err, errLoginTimeout) || errors.Is(err, errConnectFailure), err
 }
 
 func (b *Bwhatsapp) retryInterval() time.Duration {

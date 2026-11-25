@@ -29,7 +29,7 @@ func TestLoginResult(t *testing.T) {
 		{"Connected", &events.Connected{}, true, "", nil},
 		{"LoggedOut", &events.LoggedOut{OnConnect: true, Reason: events.ConnectFailureLoggedOut}, true, "logged out from another device", nil},
 		{"StreamReplaced", &events.StreamReplaced{}, true, "stream replaced", nil},
-		{"ConnectFailure", &events.ConnectFailure{Reason: events.ConnectFailureServiceUnavailable, Message: "busy"}, true, "busy", nil},
+		{"ConnectFailure", &events.ConnectFailure{Reason: events.ConnectFailureBadUserAgent, Message: "bad agent"}, true, "bad agent", errConnectFailure},
 		{"TemporaryBan", &events.TemporaryBan{Code: events.TempBanSentToTooManyPeople}, true, "temporarily banned", nil},
 		{"ClientOutdated", &events.ClientOutdated{}, true, "client outdated", errClientOutdated},
 		// Not terminal: these happen during a normal first pairing or later.

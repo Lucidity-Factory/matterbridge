@@ -24,8 +24,12 @@ const (
 	loginTimeout = 60 * time.Second
 
 	// recoveryRetryInterval is the wait between reconnect attempts after a
-	// running bridge got a 405 (client outdated).
+	// running bridge got a 405 (client outdated) or a connect failure.
 	recoveryRetryInterval = 10 * time.Minute
+
+	// maxConnectFailureRounds caps the recovery rounds that end in a connect
+	// failure, which whatsmeow does not retry itself; a 405 is not capped.
+	maxConnectFailureRounds = 6
 )
 
 var (
@@ -33,6 +37,7 @@ var (
 	errLoginFailed    = errors.New("WhatsApp login failed")
 	errLoginTimeout   = errors.New("timed out waiting for WhatsApp login")
 	errClientOutdated = errors.New("client outdated, whatsmeow needs updating")
+	errConnectFailure = errors.New("connect failure")
 )
 
 // waitForQR shows each QR code and waits for the channel to close. The
@@ -97,7 +102,7 @@ func loginResult(evt any) (bool, error) {
 	case *events.StreamReplaced:
 		return true, fmt.Errorf("%w: stream replaced by another client", errLoginFailed)
 	case *events.ConnectFailure:
-		return true, fmt.Errorf("%w: connect failure (%s: %s)", errLoginFailed, e.Reason, e.Message)
+		return true, fmt.Errorf("%w: %w (%s: %s)", errLoginFailed, errConnectFailure, e.Reason, e.Message)
 	case *events.TemporaryBan:
 		return true, fmt.Errorf("%w: %s", errLoginFailed, e.String())
 	case *events.ClientOutdated:
