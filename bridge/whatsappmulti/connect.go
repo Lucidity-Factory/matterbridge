@@ -183,11 +183,21 @@ func (b *Bwhatsapp) loadUsers() {
 
 	b.Log.Info("Getting user avatars..")
 
+	noPhoto := 0
+
 	for jid := range b.users {
 		info, err := b.GetProfilePicThumb(jid)
-		if err != nil {
+
+		switch {
+		case isMissingAvatar(err):
+			// Hidden or not set: normal for many contacts, one line each
+			// would flood the log on every start.
+			noPhoto++
+
+			b.Log.Debugf("No visible profile photo for %s: %v", jid, err)
+		case err != nil:
 			b.Log.Warnf("Could not get profile photo of %s: %v", jid, err)
-		} else {
+		default:
 			b.Lock()
 			if info != nil {
 				b.userAvatars[jid] = info.URL
@@ -196,5 +206,11 @@ func (b *Bwhatsapp) loadUsers() {
 		}
 	}
 
-	b.Log.Info("Finished getting avatars..")
+	b.Log.Infof("Finished getting avatars (%d contacts, %d without a visible profile photo)", len(b.users), noPhoto)
+}
+
+// isMissingAvatar reports whether err only means the contact has no profile
+// photo we may see.
+func isMissingAvatar(err error) bool {
+	return errors.Is(err, whatsmeow.ErrProfilePictureUnauthorized) || errors.Is(err, whatsmeow.ErrProfilePictureNotSet)
 }
