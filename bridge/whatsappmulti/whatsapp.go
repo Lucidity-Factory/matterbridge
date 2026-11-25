@@ -147,6 +147,10 @@ func (b *Bwhatsapp) Connect() error {
 		return b.failConnect(err)
 	}
 
+	// Logged in: a 405 or connect failure while contacts, groups and avatars
+	// load must start a recovery, not go to this finished wait.
+	disarm()
+
 	b.contacts, err = b.wc.Store.Contacts.GetAllContacts(context.Background())
 	if err != nil {
 		return b.failConnect(fmt.Errorf("failed to get contacts: %w", err))
